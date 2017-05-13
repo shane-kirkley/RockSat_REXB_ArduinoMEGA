@@ -95,6 +95,8 @@ class Adafruit_VC0706 {
   boolean cameraFrameBuffCtrl(uint8_t command);
   uint8_t getCompression();
   boolean setCompression(uint8_t c);
+
+  void sendPic(uint8_t n);
   
   boolean getPTZ(uint16_t &w, uint16_t &h, uint16_t &wz, uint16_t &hz, uint16_t &pan, uint16_t &tilt);
   boolean setPTZ(uint16_t wz, uint16_t hz, uint16_t pan, uint16_t tilt);
