@@ -15,4 +15,3 @@ void motorTriggerISR() {
 void releaseTriggerISR() {
   digitalWrite(REAR_MOTOR_PWR, HIGH);
 }
-

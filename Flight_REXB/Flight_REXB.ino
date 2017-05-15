@@ -47,8 +47,14 @@ const int GOPRO_INTERRUPT_PIN = 20;
 const int MOTOR_INTERRUPT_PIN = 21;
 
 // PTC08
-  Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2);
-  Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);
+Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2);
+Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);
+
+/*
+ * Function prototypes
+ */
+void downlinkFrontCamera();
+void downlinkRearCamera();
 
   /*
  * Globals
@@ -76,6 +82,10 @@ void setup() {
   pinMode(PRESSURE_C1, INPUT);
   pinMode(PRESSURE_C2, INPUT);
 
+  // UART setup
+  Serial.begin(9600); // usb serial
+  Serial1.begin(15360); // RS232 is 15360 baud
+
   // initialize SD card
   pinMode(SD_CHIP_SELECT, OUTPUT);
   if(!SD.begin(SD_CHIP_SELECT)) {
@@ -83,10 +93,28 @@ void setup() {
     return;
   }
 
-  
-  delay(200); // cam delay
-  Serial.begin(9600); // usb serial
-  Serial1.begin(15360); // RS232 is 15360 baud
+ // initialize PTC08 front/back
+      // PTC08 picture req's:
+        //  BACK: POWER ON
+        //  BACK: 20 SECONDS BEFORE DEPLOYMENT
+        //  BOTH: AFTER DEPPLOYMENT
+  if(frontCam.begin()) {
+    Serial.println("front cam intialized");
+  }
+  else {
+    Serial.println("font camera not found");
+    return;
+  }
+  if(rearCam.begin()) {
+    Serial.println("rear cam initialized");
+  }
+  else {
+    Serial.println("font camera not found");
+  }
+  delay(300);
+  frontCam.setImageSize(VC0706_640x480);
+  rearCam.setImageSize(VC0706_640x480);
+
   
   // enable interrupts
       // GO PRO INTERRUPT ON HIGH EDGE ENABLE    
@@ -95,44 +123,6 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(MOTOR_INTERRUPT_PIN), motorTriggerISR, HIGH);
       // RELEASE INTERRUPT ON LOW EDGE ENABLE
   attachInterrupt(digitalPinToInterrupt(MOTOR_INTERRUPT_PIN), releaseTriggerISR, LOW);
-  
-  // initialize PTC08 front/back
-//  if(frontCam.begin()) {
-//    Serial.println("Success");
-//  }
-//  else {
-//    Serial.println("Camera not found");
-//    return;
-//  }
-//  delay(300);
-//  frontCam.setImageSize(VC0706_640x480);
-//  uint8_t imgsize = frontCam.getImageSize();
-//  Serial.println("Image size: ");
-//  if (imgsize == VC0706_640x480) Serial.println("640x480");
-//  if (imgsize == VC0706_320x240) Serial.println("320x240");
-//  if (imgsize == VC0706_160x120) Serial.println("160x120");
-//  if (!frontCam.takePicture()) 
-//    Serial.println("Failed to take pic.");
-//  else 
-//    Serial.println("Picture taken!");
-// 
-//  uint16_t downlinkJPGsize = frontCam.frameLength();
-//  int32_t downlinkTime = millis();
-//  while(downlinkJPGsize > 0) {
-//     uint8_t* downlinkBuffer;
-//     uint8_t downlinkBytesToRead = min(32, downlinkJPGsize);
-//     downlinkBuffer = frontCam.readPicture(downlinkBytesToRead);
-//     Serial1.write(downlinkBuffer, downlinkBytesToRead);
-//     downlinkJPGsize -= downlinkBytesToRead;
-//  }
-//  downlinkTime = millis() - downlinkTime;
-//  Serial.println("downlink of image complete!");
-//  Serial.print(downlinkTime); 
-//  Serial.println(" ms elapsed");
-//  
-  // BACK: POWER ON
-  // BACK: 20 SECONDS BEFORE DEPLOYMENT
-  // BOTH: AFTER DEPPLOYMENT
   
     /*-- SD IMAGE SAVING SECTION --*/
 //  if (!frontCam.takePicture()) 
@@ -199,9 +189,52 @@ void loop() {
   Serial.print(y_data);
   Serial.println("Z: ");
   Serial.print(z_data);
-  // put your main code here, to run repeatedly:
 
 }
+
+void downlinkFrontCamera() {
+  if (!frontCam.takePicture()) 
+    Serial.println("Failed to take pic.");
+  else 
+    Serial.println("Picture taken!");
+ 
+  uint16_t downlinkJPGsize = frontCam.frameLength();
+  int32_t downlinkTime = millis();
+  while(downlinkJPGsize > 0) {
+     uint8_t* downlinkBuffer;
+     uint8_t downlinkBytesToRead = min(32, downlinkJPGsize);
+     downlinkBuffer = frontCam.readPicture(downlinkBytesToRead);
+     Serial1.write(downlinkBuffer, downlinkBytesToRead);
+     downlinkJPGsize -= downlinkBytesToRead;
+  }
+  downlinkTime = millis() - downlinkTime;
+  Serial.println("downlink of font camera image complete");
+  Serial.print(downlinkTime); 
+  Serial.println(" ms elapsed");
+}
+
+void downlinkRearCamera() {
+    if (!rearCam.takePicture()) 
+    Serial.println("Failed to take pic.");
+  else 
+    Serial.println("Picture taken!");
+ 
+  uint16_t downlinkJPGsize = rearCam.frameLength();
+  int32_t downlinkTime = millis();
+  while(downlinkJPGsize > 0) {
+     uint8_t* downlinkBuffer;
+     uint8_t downlinkBytesToRead = min(32, downlinkJPGsize);
+     downlinkBuffer = rearCam.readPicture(downlinkBytesToRead);
+     Serial1.write(downlinkBuffer, downlinkBytesToRead);
+     downlinkJPGsize -= downlinkBytesToRead;
+  }
+  downlinkTime = millis() - downlinkTime;
+  Serial.println("downlink of rear camera image complete");
+  Serial.print(downlinkTime); 
+  Serial.println(" ms elapsed");
+}
+
+
 
 
 
