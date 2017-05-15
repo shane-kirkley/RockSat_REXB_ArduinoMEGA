@@ -366,8 +366,8 @@ uint8_t * Adafruit_VC0706::readPicture(uint8_t n) {
   return camerabuff;
 }
 
-// sendPic function dumps the picture frame over uart comms WITHOUT reading response i.e no error checking 
-// for transmission over rs232. - Shane
+// sendPic function transmits the picture over Serial1 (RS232), this is busy-wait and the arduino
+//  will be completely busy during executing- Shane
 
 void Adafruit_VC0706::sendPic(uint8_t n) {
   uint8_t args[] = {0x0C, 0x0, 0x0A,
