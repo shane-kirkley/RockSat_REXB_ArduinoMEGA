@@ -17,11 +17,10 @@
 #include <SPI.h>
 #include <SD.h>
 
-#include "ISR.H"
 #include "Adafruit_VC0706.h"
  
 /*
- * Pin Defs     // could someone tell me why const is preferred over #define on arduino? -Shane
+ * Pin Defs and Globals 
  */
   // ACCELEROMETER
 const int ACCL_X = 0;
@@ -46,26 +45,38 @@ const int SD_CHIP_SELECT = 53;
 const int GOPRO_INTERRUPT_PIN = 20;
 const int MOTOR_INTERRUPT_PIN = 21;
 
+// gopro and motor pins
+const int GOPRO_1_PWR = 22;
+const int GOPRO_2_PWR = 24;
+const int GOPRO_LED_PIN = 26;
+const int FRONT_MOTOR_PWR = 28;
+const int REAR_MOTOR_PWR = 30;
+
 // PTC08
+  // timer1
+const int timer1_TCNT = 34286; // (65536 - (16MHz/256)) / 2 -> 1 Hz
+const uint8_t rearCamDelay = 20; // rearCamDelay * 500 ms = seconds to delay rear picture
+uint8_t timer1_count = 0;         // counts up to rearCamDelay.
+  // timer3 - delay after deployment
+const int timer3_TCNT = 34286;
+const uint8_t camDelayAfterDeploy = 4;
+uint8_t timer3_count = 0;
+
 Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2);
 Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);
 
 /*
- * Function prototypes
+ * Function prototypes and ISR
  */
+void goProTriggerISR();
+void motorTriggerISR();
+void releaseTriggerISR();
 void downlinkFrontCamera();
 void downlinkRearCamera();
-
-  /*
- * Globals
- */
- uint16_t * sensorDataBuffer;
- uint8_t sensorDataLength = 0;
- uint16_t x_data;
- uint16_t y_data;
- uint16_t z_data;
  
-
+/*
+ * Power on setup
+ */
 void setup() {
   
   // accelerometer setup
@@ -97,7 +108,7 @@ void setup() {
       // PTC08 picture req's:
         //  BACK: POWER ON
         //  BACK: 20 SECONDS BEFORE DEPLOYMENT
-        //  BOTH: AFTER DEPPLOYMENT
+        //  BOTH: AFTER DEPLOYMENT
   if(frontCam.begin()) {
     Serial.println("front cam intialized");
   }
@@ -114,15 +125,23 @@ void setup() {
   delay(300);
   frontCam.setImageSize(VC0706_640x480);
   rearCam.setImageSize(VC0706_640x480);
-
+  downlinkRearCamera();  // rear image downlinked on power on
   
-  // enable interrupts
+  // setup interrupts
+  noInterrupts();           // disable global interrupts
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1 = timer1_TCNT;   // preload timer
+  TCCR1B |= (1 << CS12);    // 256 prescaler 
+  TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
+  
       // GO PRO INTERRUPT ON HIGH EDGE ENABLE    
   attachInterrupt(digitalPinToInterrupt(GOPRO_INTERRUPT_PIN), goProTriggerISR, HIGH);
       // DEPLOY INTERRUPT ON HIGH EDGE ENABLE
   attachInterrupt(digitalPinToInterrupt(MOTOR_INTERRUPT_PIN), motorTriggerISR, HIGH);
       // RELEASE INTERRUPT ON LOW EDGE ENABLE
   attachInterrupt(digitalPinToInterrupt(MOTOR_INTERRUPT_PIN), releaseTriggerISR, LOW);
+  interrupts();             // enable global interrupts
   
     /*-- SD IMAGE SAVING SECTION --*/
 //  if (!frontCam.takePicture()) 
@@ -141,9 +160,6 @@ void setup() {
 //      break;
 //    }
 //  }
-//
-//
-//
 //  // Open the file for writing
 //  File imgFile = SD.open(filename, FILE_WRITE);
 //
@@ -180,15 +196,6 @@ void setup() {
 }
 
 void loop() {
-  x_data = analogRead(0);
-  y_data = analogRead(1);
-  z_data = analogRead(2);
-  Serial.println("X: ");
-  Serial.print(x_data);
-  Serial.println("Y: ");
-  Serial.print(y_data);
-  Serial.println("Z: ");
-  Serial.print(z_data);
 
 }
 
@@ -234,6 +241,47 @@ void downlinkRearCamera() {
   Serial.println(" ms elapsed");
 }
 
+ISR(TIMER1_OVF_vect) {
+  TCNT1 = timer1_TCNT;   // preload timer
+  timer1_count++;
+  if(timer1_count > rearCamDelay) {
+    downlinkRearCamera();
+    TIMSK1 = 0; // disable timer1 interrupts
+  }
+}
+
+ISR(TIMER3_OVF_vect) {
+  TCNT3 = timer3_TCNT;
+  timer3_count++;
+  if (timer3_count > camDelayAfterDeploy) {
+    downlinkFrontCamera();
+    downlinkRearCamera();
+    TIMSK3 = 0; // disable timer3 interrupts
+  }
+}
+
+void goProTriggerISR() {
+  // gopro ISR turns on both gopro cameras and LED
+  digitalWrite(GOPRO_1_PWR, HIGH);
+  digitalWrite(GOPRO_2_PWR, HIGH);
+  digitalWrite(GOPRO_LED_PIN, HIGH);
+}
+
+void motorTriggerISR() {
+  // Deploy boom and enable timer for front/rear ptc08 pics
+  digitalWrite(FRONT_MOTOR_PWR, HIGH);
+  noInterrupts();           // disable all interrupts
+  TCCR3A = 0;
+  TCCR3B = 0;
+  TCNT3 = timer3_TCNT;   // preload timer
+  TCCR3B |= (1 << CS12);    // 256 prescaler 
+  TIMSK3 |= (1 << TOIE1);   // enable timer overflow interrupt
+  interrupts();             // enable all interrupts
+}
+
+void releaseTriggerISR() {
+  digitalWrite(REAR_MOTOR_PWR, HIGH);
+}
 
 
 
