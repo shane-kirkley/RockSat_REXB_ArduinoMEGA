@@ -97,8 +97,6 @@ boolean Adafruit_VC0706::setMotionDetect(boolean flag) {
   runCommand(VC0706_COMM_MOTION_CTRL, args, sizeof(args), 5);
 }
 
-
-
 boolean Adafruit_VC0706::getMotionDetect(void) {
   uint8_t args[] = {0x0};
 

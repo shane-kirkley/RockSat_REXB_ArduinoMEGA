@@ -1,5 +1,5 @@
 /*******************************************************************
-  RockSat REX-B Flight Software
+  RockSat-X REX-B Flight Software
   (Current) Avionics Team:
   Nolan Ferguson, Virginia Nystrom, Leina Hutchinson, Shane Kirkley
   Zachery Toelkes, ???
@@ -28,46 +28,73 @@ const int ACCL_Y = 1;
 const int ACCL_Z = 2;
 
 // TEMP SENSORS
-const int TEMP_E = 3;
-const int TEMP_C1 = 5;
-const int TEMP_C2 = 7;
-const int TEMP_AMBIENT = 9;
+const int TEMP_C1 = 4;
+const int TEMP_C2 = 6;
+const int TEMP_AMBIENT = 7;
+const int TEMP_E = 15;
 
 // PRESSURE SENSORS
-const int PRESSURE_E = 4;
-const int PRESSURE_C1 = 6;
-const int PRESSURE_C2 = 8;
+const int PRESSURE_E = 14;
+const int PRESSURE_C1 = 3;
+const int PRESSURE_C2 = 5;
+
+// HUMIDITY
+const int HUMIDITY = 13;
 
 // SD CARD
 const int SD_CHIP_SELECT = 53;
+String dataString = ""; // data string to be written to SD card.
+char filename[12];
+File dataFile;
+
+// STATUS LEDS
+const int LED_PWR = 38;
+const int LED_TE2_STATUS_HIGH = 40;
+const int LED_TE3_STATUS_HIGH = 42;
+const int LED_TE3_STATUS_LOW = 44;
+const int LED_SENSOR_STATUS = 46;
 
 // Digital interrupt
 const int GOPRO_INTERRUPT_PIN = 20;
 const int MOTOR_INTERRUPT_PIN = 21;
+const int DEBOUNCE_DELAY = 20000; // microseconds
+// add global to switch interrupts for motor pin from rising to falling
 
 // gopro and motor pins
 const int GOPRO_1_PWR = 22;
 const int GOPRO_2_PWR = 24;
-const int GOPRO_LED_PIN = 26;
+const int GOPRO_LED = 26;
 const int FRONT_MOTOR_PWR = 28;
 const int REAR_MOTOR_PWR = 30;
 
 // PTC08
   // timer1
 const int timer1_TCNT = 34286; // (65536 - (16MHz/256)) / 2 -> 1 Hz
-const uint8_t rearCamDelay = 20; // rearCamDelay * 500 ms = seconds to delay rear picture
+const uint8_t rearCamDelay = 100; // rearCamDelay * 500 ms = seconds to delay rear picture
 uint8_t timer1_count = 0;         // counts up to rearCamDelay.
+  
   // timer3 - delay after deployment
 const int timer3_TCNT = 34286;
-const uint8_t camDelayAfterDeploy = 4;
-uint8_t timer3_count = 0;
-
+const uint8_t camDelayAfterDeploy = 10;
+volatile uint8_t timer3_count = 0;
+volatile uint8_t rearCamTrigger = 0; // set cam triggers true for cam downlink when available.
+volatile uint8_t frontCamTrigger = 0;
+char jpgFileName[] = "img_0000000.jpg";
 Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2);
 Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);
 
 /*
+ * RS232 FRAME HEADERS
+ */
+ // note: filename and jpg data are seperated by byte 0x00.
+const uint8_t JPG_FRAME_START[] = {0xFF, 0xF2};
+const uint8_t JPG_FRAME_END[] = {0xFF, 0xF3, 0x0D, 0x0A};
+
+uint16_t testData[] = {245, 19, 2, 52332, 42, 42, 549, 192, 29504, 20495};
+/*
  * Function prototypes and ISR
  */
+void saveData();  // saves whatever is in dataString to the sd card.
 void goProTriggerISR();
 void motorTriggerISR();
 void releaseTriggerISR();
@@ -78,6 +105,14 @@ void downlinkRearCamera();
  * Power on setup
  */
 void setup() {
+  // gopro and motors + interrupts
+  pinMode(GOPRO_1_PWR, OUTPUT);
+  pinMode(GOPRO_2_PWR, OUTPUT);
+  pinMode(GOPRO_LED, OUTPUT);
+  pinMode(FRONT_MOTOR_PWR, OUTPUT);
+  pinMode(REAR_MOTOR_PWR, OUTPUT);
+  pinMode(GOPRO_INTERRUPT_PIN, INPUT);
+  pinMode(MOTOR_INTERRUPT_PIN, INPUT_PULLUP);
   
   // accelerometer setup
   pinMode(ACCL_X, INPUT);
@@ -103,6 +138,9 @@ void setup() {
     Serial.println("SD card failure.");
     return;
   }
+  else {
+    Serial.println("SD card initialized.");
+  }
 
  // initialize PTC08 front/back
       // PTC08 picture req's:
@@ -113,37 +151,50 @@ void setup() {
     Serial.println("front cam intialized");
   }
   else {
-    Serial.println("font camera not found");
-    return;
+    Serial.println("front camera not found");
   }
   if(rearCam.begin()) {
     Serial.println("rear cam initialized");
   }
   else {
-    Serial.println("font camera not found");
+    Serial.println("rear camera not found");
   }
   delay(300);
   frontCam.setImageSize(VC0706_640x480);
   rearCam.setImageSize(VC0706_640x480);
-  downlinkRearCamera();  // rear image downlinked on power on
+  downlinkImage(rearCam); // rear cam downlink on powerup
   
   // setup interrupts
-  noInterrupts();           // disable global interrupts
-  TCCR1A = 0;
-  TCCR1B = 0;
-  TCNT1 = timer1_TCNT;   // preload timer
-  TCCR1B |= (1 << CS12);    // 256 prescaler 
-  TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
-  
-      // GO PRO INTERRUPT ON HIGH EDGE ENABLE    
-  attachInterrupt(digitalPinToInterrupt(GOPRO_INTERRUPT_PIN), goProTriggerISR, HIGH);
+//  noInterrupts();           // disable global interrupts
+//  TCCR1A = 0;
+//  TCCR1B = 0;
+//  TCNT1 = timer1_TCNT;   // preload timer
+//  TCCR1B |= (1 << CS12);    // 256 prescaler 
+//  TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
+//  interrupts();        // enable global interrupts
+        // GO PRO INTERRUPT ON HIGH EDGE ENABLE    
+  attachInterrupt(digitalPinToInterrupt(GOPRO_INTERRUPT_PIN), goProTriggerISR, RISING);
       // DEPLOY INTERRUPT ON HIGH EDGE ENABLE
-  attachInterrupt(digitalPinToInterrupt(MOTOR_INTERRUPT_PIN), motorTriggerISR, HIGH);
+  attachInterrupt(digitalPinToInterrupt(MOTOR_INTERRUPT_PIN), motorTriggerISR, RISING);
       // RELEASE INTERRUPT ON LOW EDGE ENABLE
-  attachInterrupt(digitalPinToInterrupt(MOTOR_INTERRUPT_PIN), releaseTriggerISR, LOW);
-  interrupts();             // enable global interrupts
+  attachInterrupt(digitalPinToInterrupt(MOTOR_INTERRUPT_PIN), releaseTriggerISR, FALLING);
+
+  // create CSV file on SD card.
+
+//  strcpy(filename, "DATA00.CSV");
+//  for(int i = 0; i < 100; i++) {
+//    filename[4] = '0' + 1/10;
+//    filename[5] = '0' + i%10;
+//    if (!SD.exists(filename)) {
+//      Serial.println("file name: ");
+//      Serial.print(filename);
+//      break;
+//    }
+//  }
   
-    /*-- SD IMAGE SAVING SECTION --*/
+    /*
+     *-- SD IMAGE SAVING SECTION -- 
+     */
 //  if (!frontCam.takePicture()) 
 //    Serial.println("Failed to take pic.");
 //  else 
@@ -170,7 +221,6 @@ void setup() {
 //  Serial.print(" byte image.");
 //
 //  int32_t time = millis();
-//  pinMode(8, OUTPUT);
 //  // Read all the data up to # bytes!
 //  byte wCount = 0; // For counting # of writes
 //  while (jpglen > 0) {
@@ -193,51 +243,59 @@ void setup() {
 //  Serial.print(time); 
 //  Serial.println(" ms elapsed");
 
+/*
+ * END SD IMAGE SAVING SECTION
+ */
+
 }
 
 void loop() {
-
+  if(rearCamTrigger > 0) {
+    downlinkImage(rearCam);
+  }
+  if(frontCamTrigger > 0) {
+    downlinkImage(frontCam);
+  }
+  // this part will sample all sensor data and save it to sd card
+  //saveData();
+  //delay(300);
 }
 
-void downlinkFrontCamera() {
-  if (!frontCam.takePicture()) 
-    Serial.println("Failed to take pic.");
-  else 
-    Serial.println("Picture taken!");
- 
-  uint16_t downlinkJPGsize = frontCam.frameLength();
-  int32_t downlinkTime = millis();
-  while(downlinkJPGsize > 0) {
-     uint8_t* downlinkBuffer;
-     uint8_t downlinkBytesToRead = min(32, downlinkJPGsize);
-     downlinkBuffer = frontCam.readPicture(downlinkBytesToRead);
-     Serial1.write(downlinkBuffer, downlinkBytesToRead);
-     downlinkJPGsize -= downlinkBytesToRead;
+void saveData() {
+    dataFile = SD.open(filename, FILE_WRITE);
+    //Serial.println(dataString);
+    if(dataFile) {
+      dataFile.println(dataString);
+      dataString = ""; // clear dataString
+      Serial.println("Saving data to sd card...");
+      dataFile.close(); // close to save data
   }
-  downlinkTime = millis() - downlinkTime;
-  Serial.println("downlink of font camera image complete");
-  Serial.print(downlinkTime); 
-  Serial.println(" ms elapsed");
 }
 
-void downlinkRearCamera() {
-    if (!rearCam.takePicture()) 
+void downlinkImage(Adafruit_VC0706 cam) {
+  if(!cam.takePicture()) {
     Serial.println("Failed to take pic.");
-  else 
-    Serial.println("Picture taken!");
- 
-  uint16_t downlinkJPGsize = rearCam.frameLength();
-  int32_t downlinkTime = millis();
-  while(downlinkJPGsize > 0) {
-     uint8_t* downlinkBuffer;
-     uint8_t downlinkBytesToRead = min(32, downlinkJPGsize);
-     downlinkBuffer = rearCam.readPicture(downlinkBytesToRead);
-     Serial1.write(downlinkBuffer, downlinkBytesToRead);
-     downlinkJPGsize -= downlinkBytesToRead;
   }
+  else {
+    Serial.println("Picture Taken!");
+  }
+
+  uint16_t downlinkJPGsize = cam.frameLength();
+  int32_t downlinkTime = millis();
+  Serial1.write(JPG_FRAME_START, sizeof(JPG_FRAME_START));
+  Serial1.write(jpgFileName, sizeof(jpgFileName));
+  Serial1.write(0x00);
+  while(downlinkJPGsize > 0) {
+    uint8_t * downlinkBuffer;
+    uint8_t downlinkBytesToRead = min(32, downlinkJPGsize);
+    downlinkBuffer = cam.readPicture(downlinkBytesToRead);
+    Serial1.write(downlinkBuffer, downlinkBytesToRead);
+    downlinkJPGsize -= downlinkBytesToRead;
+  }
+  Serial1.write(JPG_FRAME_END, sizeof(JPG_FRAME_END));
   downlinkTime = millis() - downlinkTime;
-  Serial.println("downlink of rear camera image complete");
-  Serial.print(downlinkTime); 
+  Serial.println("downlink of jpg complete");
+  Serial.print(downlinkTime);
   Serial.println(" ms elapsed");
 }
 
@@ -245,7 +303,8 @@ ISR(TIMER1_OVF_vect) {
   TCNT1 = timer1_TCNT;   // preload timer
   timer1_count++;
   if(timer1_count > rearCamDelay) {
-    downlinkRearCamera();
+    rearCamTrigger++;
+    timer1_count = 0;
     TIMSK1 = 0; // disable timer1 interrupts
   }
 }
@@ -254,17 +313,21 @@ ISR(TIMER3_OVF_vect) {
   TCNT3 = timer3_TCNT;
   timer3_count++;
   if (timer3_count > camDelayAfterDeploy) {
-    downlinkFrontCamera();
-    downlinkRearCamera();
+    frontCamTrigger++;
+    rearCamTrigger++;
     TIMSK3 = 0; // disable timer3 interrupts
   }
 }
 
 void goProTriggerISR() {
   // gopro ISR turns on both gopro cameras and LED
-  digitalWrite(GOPRO_1_PWR, HIGH);
-  digitalWrite(GOPRO_2_PWR, HIGH);
-  digitalWrite(GOPRO_LED_PIN, HIGH);
+  delayMicroseconds(DEBOUNCE_DELAY);  // debounce delay
+  if(digitalRead(GOPRO_INTERRUPT_PIN) == HIGH) {
+    digitalWrite(GOPRO_1_PWR, HIGH);  // gopro 1 on
+    digitalWrite(GOPRO_2_PWR, HIGH);  // gopro 2 on
+    digitalWrite(GOPRO_LED, HIGH);    // led on
+    
+  }
 }
 
 void motorTriggerISR() {

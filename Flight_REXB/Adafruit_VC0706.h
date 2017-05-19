@@ -62,7 +62,6 @@
 #define CAMERABUFFSIZ 100
 #define CAMERADELAY 10
 
-
 class Adafruit_VC0706 {
  public:
 #if not defined (_VARIANT_ARDUINO_DUE_X_) && not defined (_VARIANT_ARDUINO_ZERO_)
