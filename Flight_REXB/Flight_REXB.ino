@@ -55,10 +55,12 @@ const int LED_TE3_STATUS_LOW = 44;
 const int LED_SENSOR_STATUS = 46;
 
 // Digital interrupt
-const int GOPRO_INTERRUPT_PIN = 20;
-const int MOTOR_INTERRUPT_PIN = 21;
+const int TIMER_EVENT_1 = 20;
+const int TIMER_EVENT_2 = 21;
 const int DEBOUNCE_DELAY = 20000; // microseconds
-// add global to switch interrupts for motor pin from rising to falling
+volatile boolean timerEvent1 = false; // indicates timer event 1 triggered high.
+volatile boolean timerEvent2 = false; // turn on to switch to falling edge ejection interrupt
+volatile boolean enableTimer3 = false; // turn true in timer event 2 ISR to turn on timer for ptc08
 
 // gopro and motor pins
 const int GOPRO_1_PWR = 22;
@@ -72,13 +74,13 @@ const int REAR_MOTOR_PWR = 30;
 const int timer1_TCNT = 34286; // (65536 - (16MHz/256)) / 2 -> 1 Hz
 const uint8_t rearCamDelay = 100; // rearCamDelay * 500 ms = seconds to delay rear picture
 uint8_t timer1_count = 0;         // counts up to rearCamDelay.
-  
+
   // timer3 - delay after deployment
-const int timer3_TCNT = 34286;
 const uint8_t camDelayAfterDeploy = 10;
+const int timer3_TCNT = 34286;
 volatile uint8_t timer3_count = 0;
-volatile uint8_t rearCamTrigger = 0; // set cam triggers true for cam downlink when available.
-volatile uint8_t frontCamTrigger = 0;
+volatile boolean rearCamTrigger = false; // set cam triggers true for cam downlink when available.
+volatile boolean frontCamTrigger = false;
 char jpgFileName[] = "img_0000000.jpg";
 Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2);
 Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);
@@ -96,10 +98,8 @@ uint16_t testData[] = {245, 19, 2, 52332, 42, 42, 549, 192, 29504, 20495};
  */
 void saveData();  // saves whatever is in dataString to the sd card.
 void goProTriggerISR();
-void motorTriggerISR();
-void releaseTriggerISR();
-void downlinkFrontCamera();
-void downlinkRearCamera();
+void TimerEvent2ISR();
+void downlinkImage();
  
 /*
  * Power on setup
@@ -111,8 +111,8 @@ void setup() {
   pinMode(GOPRO_LED, OUTPUT);
   pinMode(FRONT_MOTOR_PWR, OUTPUT);
   pinMode(REAR_MOTOR_PWR, OUTPUT);
-  pinMode(GOPRO_INTERRUPT_PIN, INPUT);
-  pinMode(MOTOR_INTERRUPT_PIN, INPUT_PULLUP);
+  pinMode(TIMER_EVENT_1, INPUT);
+  pinMode(TIMER_EVENT_2, INPUT_PULLUP);
   
   // accelerometer setup
   pinMode(ACCL_X, INPUT);
@@ -165,19 +165,18 @@ void setup() {
   downlinkImage(rearCam); // rear cam downlink on powerup
   
   // setup interrupts
-//  noInterrupts();           // disable global interrupts
-//  TCCR1A = 0;
-//  TCCR1B = 0;
-//  TCNT1 = timer1_TCNT;   // preload timer
-//  TCCR1B |= (1 << CS12);    // 256 prescaler 
-//  TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
-//  interrupts();        // enable global interrupts
-        // GO PRO INTERRUPT ON HIGH EDGE ENABLE    
-  attachInterrupt(digitalPinToInterrupt(GOPRO_INTERRUPT_PIN), goProTriggerISR, RISING);
-      // DEPLOY INTERRUPT ON HIGH EDGE ENABLE
-  attachInterrupt(digitalPinToInterrupt(MOTOR_INTERRUPT_PIN), motorTriggerISR, RISING);
-      // RELEASE INTERRUPT ON LOW EDGE ENABLE
-  attachInterrupt(digitalPinToInterrupt(MOTOR_INTERRUPT_PIN), releaseTriggerISR, FALLING);
+  noInterrupts();           // disable global interrupts
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1 = timer1_TCNT;   // preload timer
+  TCCR1B |= (1 << CS12);    // 256 prescaler 
+  TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
+  interrupts();        // enable global interrupts
+        // GO PRO ENABLE ON RISING EDGE  
+  attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_1), goProTriggerISR, RISING);
+      // DEPLOY ON RISING EDGE, RELEASE ON FALLING EDGE
+  attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_2), TimerEvent2ISR, CHANGE);
+
 
   // create CSV file on SD card.
 
@@ -250,15 +249,29 @@ void setup() {
 }
 
 void loop() {
-  if(rearCamTrigger > 0) {
+  if(rearCamTrigger) {
     downlinkImage(rearCam);
+    rearCamTrigger = false;
   }
-  if(frontCamTrigger > 0) {
+  if(frontCamTrigger) {
     downlinkImage(frontCam);
+    frontCamTrigger = false;
   }
+  
   // this part will sample all sensor data and save it to sd card
   //saveData();
   //delay(300);
+  
+  if(timerEvent2 && enableTimer3) {
+    noInterrupts();           // disable all interrupts
+    TCCR3A = 0;
+    TCCR3B = 0;
+    TCNT3 = timer3_TCNT;   // preload timer
+    TCCR3B |= (1 << CS12);    // 256 prescaler 
+    TIMSK3 |= (1 << TOIE1);   // enable timer overflow interrupt
+    interrupts();             // enable all interrupts
+    enableTimer3 = false;
+  }
 }
 
 void saveData() {
@@ -299,22 +312,24 @@ void downlinkImage(Adafruit_VC0706 cam) {
   Serial.println(" ms elapsed");
 }
 
+// timer1: takes interior cam pic 20 seconds before deployment
 ISR(TIMER1_OVF_vect) {
   TCNT1 = timer1_TCNT;   // preload timer
   timer1_count++;
   if(timer1_count > rearCamDelay) {
-    rearCamTrigger++;
+    rearCamTrigger = true;
     timer1_count = 0;
     TIMSK1 = 0; // disable timer1 interrupts
   }
 }
 
+// timer3: takes front and interor cam pc after deployment
 ISR(TIMER3_OVF_vect) {
   TCNT3 = timer3_TCNT;
   timer3_count++;
   if (timer3_count > camDelayAfterDeploy) {
-    frontCamTrigger++;
-    rearCamTrigger++;
+    frontCamTrigger = true;
+    rearCamTrigger = true;
     TIMSK3 = 0; // disable timer3 interrupts
   }
 }
@@ -322,28 +337,28 @@ ISR(TIMER3_OVF_vect) {
 void goProTriggerISR() {
   // gopro ISR turns on both gopro cameras and LED
   delayMicroseconds(DEBOUNCE_DELAY);  // debounce delay
-  if(digitalRead(GOPRO_INTERRUPT_PIN) == HIGH) {
-    digitalWrite(GOPRO_1_PWR, HIGH);  // gopro 1 on
-    digitalWrite(GOPRO_2_PWR, HIGH);  // gopro 2 on
-    digitalWrite(GOPRO_LED, HIGH);    // led on
-    
+  if(!timerEvent1 && digitalRead(TIMER_EVENT_1) == HIGH) {
+     digitalWrite(GOPRO_1_PWR, HIGH);  // gopro 1 on
+     digitalWrite(GOPRO_2_PWR, HIGH);  // gopro 2 on
+     digitalWrite(GOPRO_LED, HIGH);    // led on
+     timerEvent1 = true;  // timer event 1 is high
   }
 }
 
-void motorTriggerISR() {
-  // Deploy boom and enable timer for front/rear ptc08 pics
-  digitalWrite(FRONT_MOTOR_PWR, HIGH);
-  noInterrupts();           // disable all interrupts
-  TCCR3A = 0;
-  TCCR3B = 0;
-  TCNT3 = timer3_TCNT;   // preload timer
-  TCCR3B |= (1 << CS12);    // 256 prescaler 
-  TIMSK3 |= (1 << TOIE1);   // enable timer overflow interrupt
-  interrupts();             // enable all interrupts
-}
-
-void releaseTriggerISR() {
-  digitalWrite(REAR_MOTOR_PWR, HIGH);
+void TimerEvent2ISR() {
+  delayMicroseconds(DEBOUNCE_DELAY);  // debounce delay
+  if(!timerEvent2 && digitalRead(TIMER_EVENT_2) == HIGH) {
+    // Deploy boom and enable timer for front/rear ptc08 pics
+    digitalWrite(FRONT_MOTOR_PWR, HIGH);
+    enableTimer3 = true;
+    timerEvent2 = true;
+  }
+  if(timerEvent2 && digitalRead(TIMER_EVENT_2) == LOW) {
+    // eject boom
+    digitalWrite(REAR_MOTOR_PWR, HIGH);
+    timerEvent2 = false;
+  }
+  
 }
 
 
