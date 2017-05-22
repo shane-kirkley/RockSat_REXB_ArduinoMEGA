@@ -23,27 +23,27 @@
  * Pin Defs and Globals 
  */
   // ACCELEROMETER
-const int ACCL_X = 0;
-const int ACCL_Y = 1;
-const int ACCL_Z = 2;
+const int ACCL_X = A0;
+const int ACCL_Y = A1;
+const int ACCL_Z = A2;
 
 // TEMP SENSORS
-const int TEMP_C1 = 4;
-const int TEMP_C2 = 6;
-const int TEMP_AMBIENT = 7;
-const int TEMP_E = 15;
+const int TEMP_C1 = A4;
+const int TEMP_C2 = A6;
+const int TEMP_AMBIENT = A7;
+const int TEMP_E = A15;
 
 // PRESSURE SENSORS
-const int PRESSURE_E = 14;
-const int PRESSURE_C1 = 3;
-const int PRESSURE_C2 = 5;
+const int PRESSURE_E = A14;
+const int PRESSURE_C1 = A3;
+const int PRESSURE_C2 = A5;
 
 // HUMIDITY
-const int HUMIDITY = 13;
+const int HUMIDITY = A13;
 
 // SD CARD
 const int SD_CHIP_SELECT = 53;
-String dataString = ""; // data string to be written to SD card.
+String SDdataBuffer = ""; // data string to be written to SD card.
 char filename[12];
 File dataFile;
 
@@ -55,8 +55,8 @@ const int LED_TE3_STATUS_LOW = 44;
 const int LED_SENSOR_STATUS = 46;
 
 // Digital interrupt
-const int TIMER_EVENT_1 = 20;
-const int TIMER_EVENT_2 = 21;
+const int TIMER_EVENT_1 = 2;
+const int TIMER_EVENT_2 = 3;
 const int DEBOUNCE_DELAY = 20000; // microseconds
 volatile boolean timerEvent1 = false; // indicates timer event 1 triggered high.
 volatile boolean timerEvent2 = false; // turn on to switch to falling edge ejection interrupt
@@ -81,25 +81,38 @@ const int timer3_TCNT = 34286;
 volatile uint8_t timer3_count = 0;
 volatile boolean rearCamTrigger = false; // set cam triggers true for cam downlink when available.
 volatile boolean frontCamTrigger = false;
-char jpgFileName[] = "img_0000000.jpg";
+
 Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2);
 Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);
 
-/*
- * RS232 FRAME HEADERS
+/* 
+ * RS232 FRAMES, BUFFER, AND DOWNLINK FORMATTING
  */
  // note: filename and jpg data are seperated by byte 0x00.
+char jpgFileName[] = "img0.jpg";
 const uint8_t JPG_FRAME_START[] = {0xFF, 0xF2};
 const uint8_t JPG_FRAME_END[] = {0xFF, 0xF3, 0x0D, 0x0A};
 
-uint16_t testData[] = {245, 19, 2, 52332, 42, 42, 549, 192, 29504, 20495};
+char csvFileName[] = "data.csv";  // limit file name to 16 bytes, pad extra
+const uint8_t CSV_FRAME_START[] = {0xFF, 0xF4};
+const uint8_t CSV_DATA_SPACER[] = {0x2C, 0x20}; // comma + space
+const uint8_t CSV_FRAME_END[] = {0xFF, 0xF5, 0x0D, 0x0A};
+uint16_t downlinkDataBuffer[12] = {};
+uint8_t downlinkDataSize = 0;
+const uint8_t NUM_SENSORS = 11; // this includes all temp, pressure, accl, and humidity sensors.
+    // SENSOR_PINS is the order in which sensors are sampled and saved/downlinked.
+const int SENSOR_PINS[] = {ACCL_X, ACCL_Y, ACCL_Z, TEMP_C1, TEMP_C2, 
+                            TEMP_E, TEMP_AMBIENT, PRESSURE_E, PRESSURE_C1, 
+                            PRESSURE_C2, HUMIDITY};
 /*
  * Function prototypes and ISR
  */
-void saveData();  // saves whatever is in dataString to the sd card.
+void saveData();  // saves whatever is in SDdataBuffer to the sd card.
+void downlinkData(); // sends data in downlinkDataBuffer over Serial1 (RS232)
 void goProTriggerISR();
 void TimerEvent2ISR();
 void downlinkImage();
+void getSensorData(uint16_t * buff); // gets all sensor data and stores in buff.
  
 /*
  * Power on setup
@@ -274,15 +287,35 @@ void loop() {
   }
 }
 
-void saveData() {
-    dataFile = SD.open(filename, FILE_WRITE);
-    //Serial.println(dataString);
-    if(dataFile) {
-      dataFile.println(dataString);
-      dataString = ""; // clear dataString
-      Serial.println("Saving data to sd card...");
-      dataFile.close(); // close to save data
+void getSensorData(uint16_t * buff) {
+  // gets all sensor data, puts in buff.
+  // might need to turn off interrupts while this runs.
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    buff[i] = analogRead(SENSOR_PINS[i]);
   }
+}
+
+void saveData() {
+  dataFile = SD.open(filename, FILE_WRITE);
+  //Serial.println(SDdataBuffer);
+  if(dataFile) {
+    dataFile.println(SDdataBuffer);
+    SDdataBuffer = ""; // clear SDdataBuffer
+    Serial.println("Saving data to sd card...");
+    dataFile.close(); // close to save data
+  }
+}
+
+void downlinkData() {
+  /* TEST THIS. */
+  Serial1.write(CSV_FRAME_START, sizeof(CSV_FRAME_START));
+  Serial1.write(csvFileName, sizeof(csvFileName));
+  Serial1.write(0x00);
+  for(int i = 0; i < downlinkDataSize; i++) {
+    Serial1.print(downlinkDataBuffer[i], 2);
+    Serial1.write(CSV_DATA_SPACER, sizeof(CSV_DATA_SPACER));    
+  }
+  Serial1.write(CSV_FRAME_END, sizeof(CSV_FRAME_END));
 }
 
 void downlinkImage(Adafruit_VC0706 cam) {
