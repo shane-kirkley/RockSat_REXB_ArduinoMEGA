@@ -55,8 +55,8 @@ const int LED_TE3_STATUS_LOW = 44;
 const int LED_SENSOR_STATUS = 46;
 
 // Digital interrupt
-const int TIMER_EVENT_1 = 2;
-const int TIMER_EVENT_2 = 3;
+const int TIMER_EVENT_1 = 20;
+const int TIMER_EVENT_2 = 21;
 const int DEBOUNCE_DELAY = 20000; // microseconds
 volatile boolean timerEvent1 = false; // indicates timer event 1 triggered high.
 volatile boolean timerEvent2 = false; // turn on to switch to falling edge ejection interrupt
@@ -178,15 +178,15 @@ void setup() {
   downlinkImage(rearCam); // rear cam downlink on powerup
   
   // setup interrupts
-  noInterrupts();           // disable global interrupts
-  TCCR1A = 0;
-  TCCR1B = 0;
-  TCNT1 = timer1_TCNT;   // preload timer
-  TCCR1B |= (1 << CS12);    // 256 prescaler 
-  TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
-  interrupts();        // enable global interrupts
+//  noInterrupts();           // disable global interrupts
+//  TCCR1A = 0;
+//  TCCR1B = 0;
+//  TCNT1 = timer1_TCNT;   // preload timer
+//  TCCR1B |= (1 << CS12);    // 256 prescaler 
+//  TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
+//  interrupts();        // enable global interrupts
         // GO PRO ENABLE ON RISING EDGE  
-  attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_1), goProTriggerISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_1), goProTriggerISR, CHANGE);
       // DEPLOY ON RISING EDGE, RELEASE ON FALLING EDGE
   attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_2), TimerEvent2ISR, CHANGE);
 
@@ -307,7 +307,6 @@ void saveData() {
 }
 
 void downlinkData() {
-  /* TEST THIS. */
   Serial1.write(CSV_FRAME_START, sizeof(CSV_FRAME_START));
   Serial1.write(csvFileName, sizeof(csvFileName));
   Serial1.write(0x00);
@@ -325,7 +324,19 @@ void downlinkImage(Adafruit_VC0706 cam) {
   else {
     Serial.println("Picture Taken!");
   }
-
+//    /* SD CARD */
+//    // Create an image with the name IMAGExx.JPG
+//  char filename[13];
+//  strcpy(filename, "IMAGE00.JPG");
+//  for (int i = 0; i < 100; i++) {
+//    filename[5] = '0' + i/10;
+//    filename[6] = '0' + i%10;
+//    // create if does not exist, do not open existing, write, sync after write
+//    if (! SD.exists(filename)) {
+//      break;
+//    }
+//  }
+//  File imgFile = SD.open(filename, FILE_WRITE);
   uint16_t downlinkJPGsize = cam.frameLength();
   int32_t downlinkTime = millis();
   Serial1.write(JPG_FRAME_START, sizeof(JPG_FRAME_START));
@@ -336,8 +347,10 @@ void downlinkImage(Adafruit_VC0706 cam) {
     uint8_t downlinkBytesToRead = min(32, downlinkJPGsize);
     downlinkBuffer = cam.readPicture(downlinkBytesToRead);
     Serial1.write(downlinkBuffer, downlinkBytesToRead);
+//    imgFile.write(downlinkBuffer, downlinkBytesToRead);
     downlinkJPGsize -= downlinkBytesToRead;
   }
+//  imgFile.close();
   Serial1.write(JPG_FRAME_END, sizeof(JPG_FRAME_END));
   downlinkTime = millis() - downlinkTime;
   Serial.println("downlink of jpg complete");
@@ -370,12 +383,21 @@ ISR(TIMER3_OVF_vect) {
 void goProTriggerISR() {
   // gopro ISR turns on both gopro cameras and LED
   delayMicroseconds(DEBOUNCE_DELAY);  // debounce delay
-  if(!timerEvent1 && digitalRead(TIMER_EVENT_1) == HIGH) {
+  if(digitalRead(TIMER_EVENT_1) == HIGH) {
      digitalWrite(GOPRO_1_PWR, HIGH);  // gopro 1 on
      digitalWrite(GOPRO_2_PWR, HIGH);  // gopro 2 on
      digitalWrite(GOPRO_LED, HIGH);    // led on
      timerEvent1 = true;  // timer event 1 is high
+     rearCamTrigger = true; // rear image before deployment
   }
+  if(timerEvent1 == true && digitalRead(TIMER_EVENT_1) == LOW) {
+    // turn off gopros
+     digitalWrite(GOPRO_1_PWR, LOW);  // gopro 1 off
+     digitalWrite(GOPRO_2_PWR, LOW);  // gopro 2 off
+     digitalWrite(GOPRO_LED, LOW);    // led off
+     timerEvent1 = false;
+  }
+  
 }
 
 void TimerEvent2ISR() {
