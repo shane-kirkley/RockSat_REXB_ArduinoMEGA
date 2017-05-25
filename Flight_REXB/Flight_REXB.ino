@@ -7,40 +7,19 @@
 
 /*******************************************************************
   RockSat-X REX-B Flight Software
-  (Current) Avionics Team:
+  Avionics Team:
   Nolan Ferguson, Virginia Nystrom, Leina Hutchinson, Shane Kirkley
-  Zachery Toelkes, ???
- 
+  Zachery Toelkes, Abby Caballero, with special guest Alex Bertman
 ********************************************************************/
-
-/*  Pinout located in /docs/ or in Avionics drive
- *    
- */
-
-/*
- * Includes (Arduino and implemented libraries)
- */
 
 #include <SPI.h>
 #include <SD.h>
-
 #include "Adafruit_VC0706.h"
- 
-/*
- * Pin Defs and Globals 
- */
-  // ACCELEROMETER
+
+// ACCELEROMETER (conversion functions can be found in /resources)
 const int ACCL_X = A0;
 const int ACCL_Y = A1;
 const int ACCL_Z = A2;
-
-int xRawMin = 510;
-int xRawMax = 515;
-int yRawMin = 512;
-int yRawMax = 517;
-int zRawMin = 509;
-int zRawMax = 514;
-
 const int sampleSize = 10;
 
 // TEMP SENSORS
@@ -64,11 +43,11 @@ char filename[12];
 File dataFile;
 
 // STATUS LEDS
-const int LED_PWR = 38;
-const int LED_TE2_STATUS_HIGH = 40;
-const int LED_TE3_STATUS_HIGH = 42;
-const int LED_TE3_STATUS_LOW = 44;
-const int LED_SENSOR_STATUS = 46;
+const int LED_PWR = 49;
+const int LED_TE2_STATUS_HIGH = 47;
+const int LED_TE3_STATUS_HIGH = 45;
+const int LED_TE3_STATUS_LOW = 43;
+const int LED_SENSOR_STATUS = 41;
 
 // Digital interrupt
 const int TIMER_EVENT_1 = 20;
@@ -86,52 +65,38 @@ const int FRONT_MOTOR_PWR = 28;
 const int REAR_MOTOR_PWR = 30;
 
 // PTC08
-  // timer1
-const int timer1_TCNT = 34286; // (65536 - (16MHz/256)) / 2 -> 1 Hz
-const uint8_t rearCamDelay = 100; // rearCamDelay * 500 ms = seconds to delay rear picture
-uint8_t timer1_count = 0;         // counts up to rearCamDelay.
-
-  // timer3 - delay after deployment
-const uint8_t camDelayAfterDeploy = 10;
-const int timer3_TCNT = 34286;
-volatile uint8_t timer3_count = 0;
 volatile boolean rearCamTrigger = false; // set cam triggers true for cam downlink when available.
 volatile boolean frontCamTrigger = false;
+
+// TIMERS: timer3 - safety delay after deployment
+const uint8_t safetyDelayAfterDeploy = 10;
+const int timer3_TCNT = 34286;
+volatile uint8_t timer3_count = 0;
+bool ejectionSafety = true; // this is set false by timer3 to enable ejection by TE2 LOW
 
 Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2);
 Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);
 
 /* 
- * RS232 FRAMES, BUFFER, AND DOWNLINK FORMATTING
+ * RS232 FRAMES, DOWNLINK FORMATTING AND DOWNLINKED SENSORS
  */
- // note: filename and jpg data are seperated by byte 0x00.
 char jpgFileName[] = "img0.jpg";
 const uint8_t JPG_FRAME_START[] = {0xFF, 0xF2};
 const uint8_t JPG_FRAME_END[] = {0xFF, 0xF3, 0x0D, 0x0A};
+const uint8_t NUM_SENSORS = 11; 
+int SENSOR_PINS[] = {TEMP_C1, TEMP_C2, TEMP_E, TEMP_AMBIENT, PRESSURE_E, PRESSURE_C1, PRESSURE_C2, HUMIDITY};
 
-char csvFileName[] = "data.csv";  // limit file name to 16 bytes, pad extra
-const uint8_t CSV_FRAME_START[] = {0xFF, 0xF4};
-const uint8_t CSV_DATA_SPACER[] = {0x2C, 0x20}; // comma + space
-const uint8_t CSV_FRAME_END[] = {0xFF, 0xF5, 0x0D, 0x0A};
-uint16_t downlinkDataBuffer[12] = {};
-uint8_t downlinkDataSize = 0;
-const uint8_t NUM_SENSORS = 11; // this includes all temp, pressure, accl, and humidity sensors.
-    // SENSOR_PINS is the order in which sensors are sampled and saved/downlinked.
-const int SENSOR_PINS[] = {ACCL_X, ACCL_Y, ACCL_Z, TEMP_C1, TEMP_C2, 
-                            TEMP_E, TEMP_AMBIENT, PRESSURE_E, PRESSURE_C1, 
-                            PRESSURE_C2, HUMIDITY};
 /*
  * Function prototypes and ISR
  */
 void saveData();  // saves whatever is in SDdataBuffer to the sd card.
-void downlinkData(); // sends data in downlinkDataBuffer over Serial1 (RS232)
 void goProTriggerISR();
 void TimerEvent2ISR();
-void downlinkImage();
-void getSensorData(uint16_t * buff); // gets all sensor data and stores in buff.
+void downlinkImage(Adafruit_VC0706 cam);
+String getSensorData(uint16_t * buff); // gets all sensor data and stores in buff.
+void saveData(String data);
 int ReadAxis(int axisPin); //Reads 10 samples from 
-float AccelCond(int Raw, int RawMin, int RawMax);
- 
+
 /*
  * Power on setup
  */
@@ -144,22 +109,6 @@ void setup() {
   pinMode(REAR_MOTOR_PWR, OUTPUT);
   pinMode(TIMER_EVENT_1, INPUT);
   pinMode(TIMER_EVENT_2, INPUT_PULLUP);
-  
-  // accelerometer setup
-  pinMode(ACCL_X, INPUT);
-  pinMode(ACCL_Y, INPUT);
-  pinMode(ACCL_Z, INPUT);
-
-  analogReference(EXTERNAL);
-
-  // temp and pressure sensor setup
-  pinMode(TEMP_E, INPUT);
-  pinMode(TEMP_C1, INPUT);
-  pinMode(TEMP_C2, INPUT);
-  pinMode(TEMP_AMBIENT, INPUT);
-  pinMode(PRESSURE_E, INPUT);
-  pinMode(PRESSURE_C1, INPUT);
-  pinMode(PRESSURE_C2, INPUT);
 
   // UART setup
   Serial.begin(9600); // usb serial
@@ -174,12 +123,6 @@ void setup() {
   else {
     Serial.println("SD card initialized.");
   }
-
- // initialize PTC08 front/back
-      // PTC08 picture req's:
-        //  BACK: POWER ON
-        //  BACK: 20 SECONDS BEFORE DEPLOYMENT
-        //  BOTH: AFTER DEPLOYMENT
   if(frontCam.begin()) {
     Serial.println("front cam intialized");
   }
@@ -198,104 +141,41 @@ void setup() {
   downlinkImage(rearCam); // rear cam downlink on powerup
   
   // setup interrupts
-//  noInterrupts();           // disable global interrupts
-//  TCCR1A = 0;
-//  TCCR1B = 0;
-//  TCNT1 = timer1_TCNT;   // preload timer
-//  TCCR1B |= (1 << CS12);    // 256 prescaler 
-//  TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
-//  interrupts();        // enable global interrupts
-        // GO PRO ENABLE ON RISING EDGE  
+      // GO PRO ENABLE ON RISING EDGE, TURN OFF ON FALLING EDGE
   attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_1), goProTriggerISR, CHANGE);
       // DEPLOY ON RISING EDGE, RELEASE ON FALLING EDGE
   attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_2), TimerEvent2ISR, CHANGE);
 
-
-  // create CSV file on SD card.
-
-//  strcpy(filename, "DATA00.CSV");
-//  for(int i = 0; i < 100; i++) {
-//    filename[4] = '0' + 1/10;
-//    filename[5] = '0' + i%10;
-//    if (!SD.exists(filename)) {
-//      Serial.println("file name: ");
-//      Serial.print(filename);
-//      break;
-//    }
-//  }
-  
-    /*
-     *-- SD IMAGE SAVING SECTION -- 
-     */
-//  if (!frontCam.takePicture()) 
-//    Serial.println("Failed to take pic.");
-//  else 
-//    Serial.println("Picture taken!");
-//
-    // Create an image with the name IMAGExx.JPG
-//  char filename[13];
-//  strcpy(filename, "IMAGE00.JPG");
-//  for (int i = 0; i < 100; i++) {
-//    filename[5] = '0' + i/10;
-//    filename[6] = '0' + i%10;
-//    // create if does not exist, do not open existing, write, sync after write
-//    if (! SD.exists(filename)) {
-//      break;
-//    }
-//  }
-//  // Open the file for writing
-//  File imgFile = SD.open(filename, FILE_WRITE);
-//
-//  // Get the size of the image (frame) taken  
-//  uint16_t jpglen = frontCam.frameLength();
-//  Serial.print("Storing ");
-//  Serial.print(jpglen, DEC);
-//  Serial.print(" byte image.");
-//
-//  int32_t time = millis();
-//  // Read all the data up to # bytes!
-//  byte wCount = 0; // For counting # of writes
-//  while (jpglen > 0) {
-//    // read 32 bytes at a time;
-//    uint8_t *buffer;
-//    uint8_t bytesToRead = min(32, jpglen);
-//    buffer = frontCam.readPicture(bytesToRead);
-//    imgFile.write(buffer, bytesToRead);
-//    if(++wCount >= 64) { // Every 2K, give a little feedback so it doesn't appear locked up
-//      Serial.print('.');
-//      wCount = 0;
-//    }
-//    //Serial.print("Read ");  Serial.print(bytesToRead, DEC); Serial.println(" bytes");
-//    jpglen -= bytesToRead;
-//  }
-//  imgFile.close();
-//
-//  time = millis() - time;
-//  Serial.println("done!");
-//  Serial.print(time); 
-//  Serial.println(" ms elapsed");
-
-/*
- * END SD IMAGE SAVING SECTION
- */
-
+  // create .csv file on SD card.
+  strcpy(filename, "DATA00.CSV");
+  for(int i = 0; i < 100; i++) {
+    filename[4] = '0' + 1/10;
+    filename[5] = '0' + i%10;
+    if (!SD.exists(filename)) {
+      Serial.println("file name: ");
+      Serial.print(filename);
+      break;
+    }
+  }
 }
 
+/*
+ * MAIN LOOP: 
+ */
 void loop() {
+  if(frontCamTrigger) {         // poll camera triggers
+    downlinkImage(frontCam);
+    frontCamTrigger = false;
+  }
   if(rearCamTrigger) {
     downlinkImage(rearCam);
     rearCamTrigger = false;
   }
-  if(frontCamTrigger) {
-    downlinkImage(frontCam);
-    frontCamTrigger = false;
-  }
   
-  // this part will sample all sensor data and save it to sd card
-  //saveData();
-  //delay(300);
+  SDdataBuffer = getSensorData(); // fill buffer with all sensor data
+  saveData(SDdataBuffer);         // save line to SD card
   
-  if(timerEvent2 && enableTimer3) {
+  if(enableTimer3) {
     noInterrupts();           // disable all interrupts
     TCCR3A = 0;
     TCCR3B = 0;
@@ -307,41 +187,29 @@ void loop() {
   }
 }
 
-void getSensorData(uint16_t * buff) {
-  // gets all sensor data, puts in buff.
-  // might need to turn off interrupts while this runs.
+/*
+ * INTERRUPT AND FUNCTION DEFINITIONS
+ */
+String getSensorData() {
+  // returns all sensor data in string format
+  // might need to turn off interrupts while this runs?
+  String sensorData = "";
   for (int i = 0; i < NUM_SENSORS; i++) {
-    buff[i] = analogRead(SENSOR_PINS[i]);
+    sensorData += String(analogRead(SENSOR_PINS[i])) + ",";
   }
+  sensorData += String(ReadAxis(ACCL_X)) + ",";
+  sensorData += String(ReadAxis(ACCL_Y)) + ",";
+  sensorData += String(ReadAxis(ACCL_Z)) + ",";
+  return sensorData;
 }
 
-void saveData() {
+void saveData(String data) {
   dataFile = SD.open(filename, FILE_WRITE);
-  int xRaw = ReadAxis(ACCL_X);
-  float xAcc = AccelCond(xRaw,xRawMin,xRawMax);
-  int yRaw = ReadAxis(ACCL_Y);
-  float yAcc = AccelCond(yRaw,yRawMin,yRawMax);
-  int zRaw = ReadAxis(ACCL_Z);
-  float zAcc = AccelCond(zRaw,zRawMin,zRawMax);
-  
-  //Serial.println(SDdataBuffer);
   if(dataFile) {
-    dataFile.println(SDdataBuffer);
-    SDdataBuffer = ""; // clear SDdataBuffer
+    dataFile.println(data);
     Serial.println("Saving data to sd card...");
     dataFile.close(); // close to save data
   }
-}
-
-void downlinkData() {
-  Serial1.write(CSV_FRAME_START, sizeof(CSV_FRAME_START));
-  Serial1.write(csvFileName, sizeof(csvFileName));
-  Serial1.write(0x00);
-  for(int i = 0; i < downlinkDataSize; i++) {
-    Serial1.print(downlinkDataBuffer[i], 2);
-    Serial1.write(CSV_DATA_SPACER, sizeof(CSV_DATA_SPACER));    
-  }
-  Serial1.write(CSV_FRAME_END, sizeof(CSV_FRAME_END));
 }
 
 void downlinkImage(Adafruit_VC0706 cam) {
@@ -351,19 +219,6 @@ void downlinkImage(Adafruit_VC0706 cam) {
   else {
     Serial.println("Picture Taken!");
   }
-//    /* SD CARD */
-//    // Create an image with the name IMAGExx.JPG
-//  char filename[13];
-//  strcpy(filename, "IMAGE00.JPG");
-//  for (int i = 0; i < 100; i++) {
-//    filename[5] = '0' + i/10;
-//    filename[6] = '0' + i%10;
-//    // create if does not exist, do not open existing, write, sync after write
-//    if (! SD.exists(filename)) {
-//      break;
-//    }
-//  }
-//  File imgFile = SD.open(filename, FILE_WRITE);
   uint16_t downlinkJPGsize = cam.frameLength();
   int32_t downlinkTime = millis();
   Serial1.write(JPG_FRAME_START, sizeof(JPG_FRAME_START));
@@ -374,10 +229,8 @@ void downlinkImage(Adafruit_VC0706 cam) {
     uint8_t downlinkBytesToRead = min(32, downlinkJPGsize);
     downlinkBuffer = cam.readPicture(downlinkBytesToRead);
     Serial1.write(downlinkBuffer, downlinkBytesToRead);
-//    imgFile.write(downlinkBuffer, downlinkBytesToRead);
     downlinkJPGsize -= downlinkBytesToRead;
   }
-//  imgFile.close();
   Serial1.write(JPG_FRAME_END, sizeof(JPG_FRAME_END));
   downlinkTime = millis() - downlinkTime;
   Serial.println("downlink of jpg complete");
@@ -385,24 +238,12 @@ void downlinkImage(Adafruit_VC0706 cam) {
   Serial.println(" ms elapsed");
 }
 
-// timer1: takes interior cam pic 20 seconds before deployment
-ISR(TIMER1_OVF_vect) {
-  TCNT1 = timer1_TCNT;   // preload timer
-  timer1_count++;
-  if(timer1_count > rearCamDelay) {
-    rearCamTrigger = true;
-    timer1_count = 0;
-    TIMSK1 = 0; // disable timer1 interrupts
-  }
-}
-
-// timer3: takes front and interor cam pc after deployment
+// timer3: safety timer to ensure boom does not get accidentally deployed
 ISR(TIMER3_OVF_vect) {
   TCNT3 = timer3_TCNT;
   timer3_count++;
-  if (timer3_count > camDelayAfterDeploy) {
-    frontCamTrigger = true;
-    rearCamTrigger = true;
+  if (timer3_count > safetyDelayAfterDeploy) {
+    ejectionSafety = false; // disable safety delay for ejection
     TIMSK3 = 0; // disable timer3 interrupts
   }
 }
@@ -424,33 +265,26 @@ void goProTriggerISR() {
      digitalWrite(GOPRO_LED, LOW);    // led off
      timerEvent1 = false;
   }
-  
 }
 
 void TimerEvent2ISR() {
   delayMicroseconds(DEBOUNCE_DELAY);  // debounce delay
-  if(!timerEvent2 && digitalRead(TIMER_EVENT_2) == HIGH) {
+  if(digitalRead(TIMER_EVENT_2) == HIGH) {
     // Deploy boom and enable timer for front/rear ptc08 pics
     digitalWrite(FRONT_MOTOR_PWR, HIGH);
     enableTimer3 = true;
     timerEvent2 = true;
+    frontCamTrigger = true;
+    rearCamTrigger = true;
   }
-  if(timerEvent2 && digitalRead(TIMER_EVENT_2) == LOW) {
+  if(digitalRead(TIMER_EVENT_2) == LOW && !ejectionSafety) {
     // eject boom
     digitalWrite(REAR_MOTOR_PWR, HIGH);
     timerEvent2 = false;
   }
-  
 }
 
-float AccelCond(int Raw, int RawMin, int RawMax){
-  float Acc = map(Raw,RawMin,RawMax,-1000,1000)/1000.0;
-  return Acc;
-}
-
-
-int ReadAxis(int axisPin)
-{
+int ReadAxis(int axisPin) {
   long reading = 0;
   analogRead(axisPin);
   delay(1);
@@ -460,6 +294,4 @@ int ReadAxis(int axisPin)
     }
   return reading/sampleSize;
 }
-
-
 
