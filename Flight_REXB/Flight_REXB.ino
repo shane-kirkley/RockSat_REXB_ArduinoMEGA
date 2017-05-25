@@ -36,6 +36,10 @@ const int PRESSURE_C2 = A5;
 // HUMIDITY
 const int HUMIDITY = A13;
 
+// SENSORS TO SAVE TO SD CARD (accelerometer seperate):
+const uint8_t NUM_SENSORS = 11; 
+int SENSOR_PINS[] = {TEMP_C1, TEMP_C2, TEMP_E, TEMP_AMBIENT, PRESSURE_E, PRESSURE_C1, PRESSURE_C2, HUMIDITY};
+
 // SD CARD
 const int SD_CHIP_SELECT = 53;
 String SDdataBuffer = ""; // data string to be written to SD card.
@@ -83,8 +87,6 @@ Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);
 char jpgFileName[] = "img0.jpg";
 const uint8_t JPG_FRAME_START[] = {0xFF, 0xF2};
 const uint8_t JPG_FRAME_END[] = {0xFF, 0xF3, 0x0D, 0x0A};
-const uint8_t NUM_SENSORS = 11; 
-int SENSOR_PINS[] = {TEMP_C1, TEMP_C2, TEMP_E, TEMP_AMBIENT, PRESSURE_E, PRESSURE_C1, PRESSURE_C2, HUMIDITY};
 
 /*
  * Function prototypes and ISR
