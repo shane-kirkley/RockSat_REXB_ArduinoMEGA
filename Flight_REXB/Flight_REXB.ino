@@ -37,7 +37,7 @@ const int PRESSURE_C2 = A5;
 const int HUMIDITY = A13;
 
 // SENSORS TO SAVE TO SD CARD (accelerometer seperate):
-const uint8_t NUM_SENSORS = 11; 
+const uint8_t NUM_SENSORS = 8; 
 int SENSOR_PINS[] = {TEMP_C1, TEMP_C2, TEMP_E, TEMP_AMBIENT, PRESSURE_E, PRESSURE_C1, PRESSURE_C2, HUMIDITY};
 
 // SD CARD
@@ -62,7 +62,7 @@ volatile boolean timerEvent2 = false; // turn on to switch to falling edge eject
 volatile boolean enableTimer3 = false; // turn true in timer event 2 ISR to turn on timer for ptc08
 
 // gopro and motor pins
-const int GOPRO_1_PWR = 22;
+const int GOPRO_1_PWR = 44;
 const int GOPRO_2_PWR = 24;
 const int GOPRO_LED = 26;
 const int FRONT_MOTOR_PWR = 28;
@@ -95,10 +95,20 @@ void saveData();  // saves whatever is in SDdataBuffer to the sd card.
 void goProTriggerISR();
 void TimerEvent2ISR();
 void downlinkImage(Adafruit_VC0706 cam);
-String getSensorData(uint16_t * buff); // gets all sensor data and stores in buff.
+String getSensorData(); // returns string of all sensor data
 void saveData(String data);
-int ReadAxis(int axisPin); //Reads 10 samples from 
+int ReadAxis(int axisPin); //Reads 10 samples from axisPin of accelerometer
 
+
+/*
+ * random stuff
+ */
+ int pressure1;
+ int pressure2;
+ int pressure3;
+ int temp1;
+ int temp2;
+ int temp3;
 /*
  * Power on setup
  */
@@ -109,8 +119,13 @@ void setup() {
   pinMode(GOPRO_LED, OUTPUT);
   pinMode(FRONT_MOTOR_PWR, OUTPUT);
   pinMode(REAR_MOTOR_PWR, OUTPUT);
-  pinMode(TIMER_EVENT_1, INPUT);
+  pinMode(TIMER_EVENT_1, INPUT_PULLUP);
   pinMode(TIMER_EVENT_2, INPUT_PULLUP);
+  pinMode(LED_PWR, OUTPUT);
+  pinMode(LED_TE2_STATUS_HIGH, OUTPUT);
+  pinMode(LED_TE3_STATUS_HIGH, OUTPUT);
+  pinMode(LED_TE3_STATUS_LOW, OUTPUT);
+  pinMode(LED_SENSOR_STATUS, OUTPUT);
 
   // UART setup
   Serial.begin(9600); // usb serial
@@ -120,10 +135,11 @@ void setup() {
   pinMode(SD_CHIP_SELECT, OUTPUT);
   if(!SD.begin(SD_CHIP_SELECT)) {
     Serial.println("SD card failure.");
-    return;
+    //return;
   }
   else {
     Serial.println("SD card initialized.");
+    digitalWrite(LED_SENSOR_STATUS, HIGH);  // i actually dont know what sensor status is.
   }
   if(frontCam.begin()) {
     Serial.println("front cam intialized");
@@ -176,6 +192,24 @@ void loop() {
   
   SDdataBuffer = getSensorData(); // fill buffer with all sensor data
   saveData(SDdataBuffer);         // save line to SD card
+
+  
+//  temp1 = analogRead(A4);
+//  pressure1 = analogRead(PRESSURE_C1);
+//  pressure2 = analogRead(PRESSURE_C2);
+//  double tvoltage = (double)temp1 / 1024;
+//  tvoltage = tvoltage * 5;
+//  double tempC = (tvoltage - 0.5) * 100;
+//  Serial.print(tempC);
+//  Serial.println(" degrees C");
+//
+//  Serial.print(pressure1);
+//  Serial.println(" - pressure1");
+//  Serial.print(pressure2);
+//  Serial.println(" - pressure2");
+//  Serial.print("\n");
+//  delay(4000);
+//  
   
   if(enableTimer3) {
     noInterrupts();           // disable all interrupts
@@ -209,7 +243,7 @@ void saveData(String data) {
   dataFile = SD.open(filename, FILE_WRITE);
   if(dataFile) {
     dataFile.println(data);
-    Serial.println("Saving data to sd card...");
+    //Serial.println("Saving data to sd card...");
     dataFile.close(); // close to save data
   }
 }
@@ -257,6 +291,7 @@ void goProTriggerISR() {
      digitalWrite(GOPRO_1_PWR, HIGH);  // gopro 1 on
      digitalWrite(GOPRO_2_PWR, HIGH);  // gopro 2 on
      digitalWrite(GOPRO_LED, HIGH);    // led on
+     digitalWrite(LED_TE2_STATUS_HIGH, HIGH); // status led on
      timerEvent1 = true;  // timer event 1 is high
      rearCamTrigger = true; // rear image before deployment
   }
@@ -265,6 +300,7 @@ void goProTriggerISR() {
      digitalWrite(GOPRO_1_PWR, LOW);  // gopro 1 off
      digitalWrite(GOPRO_2_PWR, LOW);  // gopro 2 off
      digitalWrite(GOPRO_LED, LOW);    // led off
+     digitalWrite(LED_TE2_STATUS_HIGH, LOW); // status led off
      timerEvent1 = false;
   }
 }
@@ -274,6 +310,7 @@ void TimerEvent2ISR() {
   if(digitalRead(TIMER_EVENT_2) == HIGH) {
     // Deploy boom and enable timer for front/rear ptc08 pics
     digitalWrite(FRONT_MOTOR_PWR, HIGH);
+    digitalWrite(LED_TE3_STATUS_HIGH, HIGH);
     enableTimer3 = true;
     timerEvent2 = true;
     frontCamTrigger = true;
@@ -282,6 +319,8 @@ void TimerEvent2ISR() {
   if(digitalRead(TIMER_EVENT_2) == LOW && !ejectionSafety) {
     // eject boom
     digitalWrite(REAR_MOTOR_PWR, HIGH);
+    digitalWrite(LED_TE3_STATUS_HIGH, LOW); // status leds
+    digitalWrite(LED_TE3_STATUS_LOW, HIGH);
     timerEvent2 = false;
   }
 }
