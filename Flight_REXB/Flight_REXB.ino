@@ -71,7 +71,7 @@ volatile boolean rearCamTrigger = false; // set cam triggers true for cam downli
 volatile boolean frontCamTrigger = false;
 
 // TIMERS: timer3 - safety delay after deployment
-const uint8_t ejectDelay = 210;
+const uint8_t ejectDelay = 220;
 const int timer3_TCNT = 34286;
 volatile uint8_t timer3_count = 0;
 volatile bool ejectionSafety = true; // this is set false by timer3 to enable ejection by TE2 LOW
@@ -141,15 +141,15 @@ void setup() {
     Serial.println("ERROR: rear camera not found");
   }
   delay(300);
-  frontCam.setImageSize(VC0706_640x480);
   rearCam.setImageSize(VC0706_640x480);
+  frontCam.setImageSize(VC0706_640x480);
   downlinkImage(rearCam); // rear cam downlink on powerup
-  
+  //downlinkImage(frontCam); // REMOVE
   // setup interrupts
       // GO PRO ENABLE ON RISING EDGE, TURN OFF ON FALLING EDGE
-  attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_2), TimerEvent3ISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_2), TimerEvent2ISR, CHANGE);
       // DEPLOY ON RISING EDGE, RELEASE ON FALLING EDGE
-  attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_3), TimerEvent2ISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_3), TimerEvent3ISR, CHANGE);
 
   // create .csv file on SD card.
   strcpy(filename, "DATA00.CSV");
@@ -178,11 +178,11 @@ void loop() {
     downlinkImage(rearCam);
     rearCamTrigger = false;
   }
-  
   SDdataBuffer = getSensorData(); // fill buffer with all sensor data
   saveData(SDdataBuffer);         // save line to SD card
-  
   if(enableTimer3) {
+    detachInterrupt(digitalPinToInterrupt(TIMER_EVENT_2));
+    detachInterrupt(digitalPinToInterrupt(TIMER_EVENT_3));
     noInterrupts();           // disable all interrupts
     TCCR3A = 0;
     TCCR3B = 0;
@@ -252,7 +252,6 @@ ISR(TIMER3_OVF_vect) {
   TCNT3 = timer3_TCNT;
   timer3_count++;
   if (timer3_count > ejectDelay) {
-    ejectionSafety = false; // disable safety delay for ejection
     TIMSK3 = 0; // disable timer3 interrupts
     digitalWrite(REAR_MOTOR_PWR, HIGH);
     digitalWrite(LED_TE3_STATUS_HIGH, LOW); // status leds
@@ -266,6 +265,9 @@ void TimerEvent2ISR() {
   if(digitalRead(TIMER_EVENT_2) == HIGH) {
      digitalWrite(GOPRO_1_PWR, HIGH);  // gopro 1 on
      digitalWrite(GOPRO_2_PWR, HIGH);  // gopro 2 on
+     delayMicroseconds(200000);
+     digitalWrite(GOPRO_1_PWR, LOW);  // gopro 1
+     digitalWrite(GOPRO_2_PWR, LOW);  // gopro 2
      digitalWrite(GOPRO_LED, HIGH);    // led on
      digitalWrite(LED_TE2_STATUS_HIGH, HIGH); // status led on
      rearCamTrigger = true; // rear image before deployment
@@ -293,5 +295,57 @@ int ReadAxis(int axisPin) {
       reading += analogRead(axisPin);
     }
   return reading/sampleSize;
+}
+
+void saveImageToSD(Adafruit_VC0706 cam) {
+  if (!cam.takePicture()) {
+    Serial.println("Failed to take pic.");
+    return;
+  }
+  else {
+    Serial.println("Picture taken!");
+  }
+  char imgFileName[13];
+  strcpy(imgFileName, "IMAGE00.JPG");
+  for (int i = 0; i < 100; i++) {
+   imgFileName[5] = '0' + i/10;
+   imgFileName[6] = '0' + i%10;
+   // create if does not exist, do not open existing, write, sync after write
+   if (! SD.exists(imgFileName)) {
+     break;
+   }
+ }
+ Serial.print(imgFileName);
+ // Open the file for writing
+ File SDimgFile = SD.open(imgFileName, FILE_WRITE);
+
+ // Get the size of the image (frame) taken  
+ uint16_t jpglen = cam.frameLength();
+ Serial.print("Storing ");
+ Serial.print(jpglen, DEC);
+ Serial.print(" byte image.");
+
+ int32_t time = millis();
+ // Read all the data up to # bytes!
+ byte wCount = 0; // For counting # of writes
+ while (jpglen > 0) {
+   // read 32 bytes at a time;
+   uint8_t *buffer;
+   uint8_t bytesToRead = min(32, jpglen);
+   buffer = cam.readPicture(bytesToRead);
+   SDimgFile.write(buffer, bytesToRead);
+   if(++wCount >= 64) { // Every 2K, give a little feedback so it doesn't appear locked up
+     Serial.print('.');
+     wCount = 0;
+   }
+   //Serial.print("Read ");  Serial.print(bytesToRead, DEC); Serial.println(" bytes");
+   jpglen -= bytesToRead;
+ }
+ SDimgFile.close();
+
+ time = millis() - time;
+ Serial.println("done!");
+ Serial.print(time); 
+ Serial.println(" ms elapsed");
 }
 
