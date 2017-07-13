@@ -6,8 +6,9 @@
 
 /*******************************************************************
  * TODO:
- * - Label and format SD card recorded data
+ * - Test timing of deployment and ejection.
  *******************************************************************/
+ 
 #include <Dhcp.h>
 #include <Dns.h>
 #include <Ethernet.h>
@@ -49,11 +50,9 @@ char filename[12];
 File dataFile;
 
 // STATUS LEDS
-const int LED_PWR = 49;
-const int LED_TE2_STATUS_HIGH = 47;
-const int LED_TE3_STATUS_HIGH = 45;
-const int LED_TE3_STATUS_LOW = 43;
-const int LED_SENSOR_STATUS = 41;
+const int LED_TE2_STATUS = 47;
+const int LED_TE3_STATUS = 45;
+const int LED_DOWNLINK_STATUS = 49;
 
 // Digital interrupt
 const int TIMER_EVENT_2 = 20;
@@ -61,17 +60,16 @@ const int TIMER_EVENT_3 = 21;
 const int DEBOUNCE_DELAY = 20000; // microseconds
 
 // gopro and motor pins
-const int GOPRO_1_PWR = 44;
-const int GOPRO_2_PWR = 24;
-const int GOPRO_LED = 26;
-const int FRONT_MOTOR_PWR = 28;
-const int REAR_MOTOR_PWR = 30;
+const int GOPRO_1_PWR = 22; // GP1
+const int GOPRO_2_PWR = 24; // GP2
+const int FRONT_MOTOR_PWR = 28;  // LA1
+const int REAR_MOTOR_PWR = 30;   // LA2
 
 // PTC08
 volatile boolean rearCamTrigger = false; // set cam triggers true for cam downlink when available.
 volatile boolean frontCamTrigger = false;
-Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2);
-Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);
+Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2); //
+Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);  //
 
 // TIMERS: 
   // timer3 - delay EJECTION for ~100s
@@ -121,11 +119,9 @@ void setup() {
   pinMode(REAR_MOTOR_PWR, OUTPUT);
   pinMode(TIMER_EVENT_2, INPUT);
   pinMode(TIMER_EVENT_3, INPUT);
-  pinMode(LED_PWR, OUTPUT);
-  pinMode(LED_TE2_STATUS_HIGH, OUTPUT);
-  pinMode(LED_TE3_STATUS_HIGH, OUTPUT);
-  pinMode(LED_TE3_STATUS_LOW, OUTPUT);
-  pinMode(LED_SENSOR_STATUS, OUTPUT);
+  pinMode(LED_TE2_STATUS, OUTPUT);
+  pinMode(LED_TE3_STATUS, OUTPUT);
+  pinMode(LED_DOWNLINK_STATUS, OUTPUT);
 
   // UART setup
   Serial.begin(9600); // usb serial
@@ -186,15 +182,11 @@ void loop() {
   
   if(frontCamTrigger) {         // poll camera triggers
     delay(600);
-    digitalWrite(GOPRO_1_PWR, LOW);
-    digitalWrite(GOPRO_2_PWR, LOW);
     downlinkImage(frontCam);
     frontCamTrigger = false;
   }
   if(rearCamTrigger) {
     delay(600);
-    digitalWrite(GOPRO_1_PWR, LOW);
-    digitalWrite(GOPRO_2_PWR, LOW);
     downlinkImage(rearCam);
     rearCamTrigger = false;
   }
@@ -235,7 +227,6 @@ void loop() {
  */
 String getSensorData() {
   // returns all sensor data in string format
-  // might need to turn off interrupts while this runs?
   String sensorData = "";
   for (int i = 0; i < NUM_SENSORS; i++) {
     sensorData += String(analogRead(SENSOR_PINS[i])) + ",";
@@ -260,7 +251,7 @@ void downlinkImage(Adafruit_VC0706 cam) {
     Serial.println("ERROR: Failed to take pic.");
   }
   else {
-    digitalWrite(LED_SENSOR_STATUS, HIGH);
+    digitalWrite(LED_DOWNLINK_STATUS, HIGH);
     Serial.println("Picture Taken!");
     uint16_t downlinkJPGsize = cam.frameLength();
     int32_t downlinkTime = millis();
@@ -279,7 +270,7 @@ void downlinkImage(Adafruit_VC0706 cam) {
     Serial.println("downlink of jpg complete");
     Serial.print(downlinkTime);
     Serial.println(" ms elapsed");
-    digitalWrite(LED_SENSOR_STATUS, LOW);
+    digitalWrite(LED_DOWNLINK_STATUS, LOW);
   }
 }
 
@@ -291,7 +282,7 @@ ISR(TIMER3_OVF_vect) {
     TIMSK3 = 0; // disable timer3 interrupts
     timer3_count = 0;
     digitalWrite(REAR_MOTOR_PWR, HIGH);     // eject boom
-    digitalWrite(LED_TE3_STATUS_HIGH, LOW); // status led low
+    digitalWrite(LED_TE3_STATUS, LOW); // status led low
   }
 }
 
@@ -303,9 +294,9 @@ ISR(TIMER4_OVF_vect) {
     TIMSK4 = 0; // disable timer4 interrupts
     timer4_count = 0;
     digitalWrite(FRONT_MOTOR_PWR, HIGH); // deploy boom
-    digitalWrite(LED_TE3_STATUS_HIGH, HIGH);
-    enableTimer3 = true;                 // ejection delay (105 s)
-    enableTimer5 = true;                 // delay low res images (5 s)
+    digitalWrite(LED_TE3_STATUS, HIGH);
+    enableTimer3 = true;                 // enable ejection delay (105 s)
+    enableTimer5 = true;                 // enable delay low res images (5 s)
   }
 }
 
@@ -325,13 +316,13 @@ void TimerEvent2ISR() {
   uint8_t i;
   delayMicroseconds(DEBOUNCE_DELAY);  // debounce delay
   if(digitalRead(TIMER_EVENT_2) == HIGH) {
-    // TEST MULTIPLE GOPRO TRIGGERS
-    //for(i = 0; i < 10; i++) {
-       digitalWrite(GOPRO_1_PWR, HIGH);
-       digitalWrite(GOPRO_2_PWR, HIGH);       
-    //}
-  digitalWrite(LED_TE2_STATUS_HIGH, HIGH); // status led on
-  rearCamTrigger = true; // rear image before deployment
+    digitalWrite(GOPRO_1_PWR, HIGH);
+    digitalWrite(GOPRO_2_PWR, HIGH);       
+    digitalWrite(LED_TE2_STATUS, HIGH); // status led on
+    rearCamTrigger = true; // rear image before deployment
+    delayMicroseconds(10000);
+    digitalWrite(GOPRO_1_PWR, LOW);
+    digitalWrite(GOPRO_2_PWR, LOW);       
   }
 }
 
@@ -339,7 +330,7 @@ void TimerEvent3ISR() {
   delayMicroseconds(DEBOUNCE_DELAY);  // debounce delay
   if(digitalRead(TIMER_EVENT_3) == HIGH) {
     // Deploy boom and enable timer for front/rear ptc08 pics
-    //digitalWrite(LED_TE3_STATUS_HIGH, HIGH);
+    //digitalWrite(LED_TE3_STATUS, HIGH);
     enableTimer4 = true; // deployment delay enable
   }
 }
@@ -396,7 +387,6 @@ void saveImageToSD(Adafruit_VC0706 cam) {
      Serial.print('.');
      wCount = 0;
    }
-   //Serial.print("Read ");  Serial.print(bytesToRead, DEC); Serial.println(" bytes");
    jpglen -= bytesToRead;
  }
  SDimgFile.close();
