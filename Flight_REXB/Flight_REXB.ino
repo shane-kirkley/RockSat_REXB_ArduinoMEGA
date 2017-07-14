@@ -134,6 +134,27 @@ void setup() {
   }
   else {
     Serial.println("SD card initialized.");
+      // create .csv file on SD card.
+    strcpy(filename, "DATA00.CSV");
+    for(int i = 0; i < 100; i++) {    
+      filename[4] = '0' + i/10;
+      filename[5] = '0' + i%10;
+      if (!SD.exists(filename)) {
+        Serial.println("file name: ");
+        Serial.print(filename);
+        Serial.println();
+        Serial.println();
+        break;
+      }
+    }
+    dataFile = SD.open(filename, FILE_WRITE);
+    if(dataFile) {
+      // if order of sensor sampling changes, dataTitles ahould be changed to reflect that.
+      String dataTitles = "TEMP_C1,TEMP_C2,TEMP_E,TEMP_AMBIENT,PRESSURE_E,PRESSURE_C1,PRESSURE_C2,HUMIDITY";
+      dataFile.println(dataTitles);
+      dataFile.close(); // close to save data
+  }
+    
   }
   if(frontCam.begin()) {
     Serial.println("front cam intialized");
@@ -157,20 +178,6 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_2), TimerEvent2ISR, CHANGE);
       // DEPLOY ON RISING EDGE, ENABLE TIMER3 FOR RELEASE
   attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_3), TimerEvent3ISR, CHANGE);
-
-  // create .csv file on SD card.
-  strcpy(filename, "DATA00.CSV");
-  for(int i = 0; i < 100; i++) {    
-    filename[4] = '0' + i/10;
-    filename[5] = '0' + i%10;
-    if (!SD.exists(filename)) {
-      Serial.println("file name: ");
-      Serial.print(filename);
-      Serial.println();
-      Serial.println();
-      break;
-    }
-  }
 }
 
 /*
