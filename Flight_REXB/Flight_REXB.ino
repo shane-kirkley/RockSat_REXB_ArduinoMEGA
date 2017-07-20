@@ -7,6 +7,7 @@
 /*******************************************************************
  * TODO:
  * - Test timing of deployment and ejection.
+ * - Timestamps for sensor data.
  *******************************************************************/
  
 #include <Dhcp.h>
@@ -25,13 +26,13 @@ const int ACCL_Y = A1;
 const int ACCL_Z = A2;
 const int sampleSize = 10;
 
-// TEMP SENSORS
+// TEMP SENSORS: [room temp raw = ~145]
 const int TEMP_C1 = A4;
 const int TEMP_C2 = A6;
 const int TEMP_AMBIENT = A7;
 const int TEMP_E = A15;
 
-// PRESSURE SENSORS
+// PRESSURE SENSORS: [pressure raw at campus = ~675]
 const int PRESSURE_E = A14;
 const int PRESSURE_C1 = A3;
 const int PRESSURE_C2 = A5;
@@ -60,7 +61,7 @@ const int TIMER_EVENT_3 = 21;
 const int DEBOUNCE_DELAY = 20000; // microseconds
 
 // gopro and motor pins
-const int GOPRO_1_PWR = 22; // GP1
+const int GOPRO_1_PWR = 44; // GP1
 const int GOPRO_2_PWR = 24; // GP2
 const int FRONT_MOTOR_PWR = 28;  // LA1
 const int REAR_MOTOR_PWR = 30;   // LA2
@@ -68,21 +69,21 @@ const int REAR_MOTOR_PWR = 30;   // LA2
 // PTC08
 volatile boolean rearCamTrigger = false; // set cam triggers true for cam downlink when available.
 volatile boolean frontCamTrigger = false;
-Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2); //
-Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);  //
+Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2); // pin 16,17 - glenn air A (colorful)
+Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);  // 
 
 // TIMERS: 
-  // timer3 - delay EJECTION for ~100s
+  // timer3 - delay EJECTION for ~80s
 volatile boolean enableTimer3 = false; // true to enable timer3
-const uint8_t ejectDelay = 200;
+const uint8_t ejectDelay = 160;
 const int timer3_TCNT = 34286;
 volatile uint8_t timer3_count = 0;
 
   // timer4 - delay DEPLOYMENT after timer event ~5s
-volatile boolean enableTimer4 = false; // true to enable timer4
-const uint8_t deployDelay = 10;
-const int timer4_TCNT = 34286;
-volatile uint8_t timer4_count = 0;
+//volatile boolean enableTimer4 = false; // true to enable timer4
+//const uint8_t deployDelay = 10;
+//const int timer4_TCNT = 34286;
+//volatile uint8_t timer4_count = 0;
 
   // timer5 - delay LOW RES IMGS after deployment ~
 volatile boolean enableTimer5 = false; // true to enable timer5
@@ -150,12 +151,13 @@ void setup() {
     dataFile = SD.open(filename, FILE_WRITE);
     if(dataFile) {
       // if order of sensor sampling changes, dataTitles ahould be changed to reflect that.
-      String dataTitles = "TEMP_C1,TEMP_C2,TEMP_E,TEMP_AMBIENT,PRESSURE_E,PRESSURE_C1,PRESSURE_C2,HUMIDITY";
+      String dataTitles = "T+ (ms),TEMP_C1,TEMP_C2,TEMP_E,TEMP_AMBIENT,PRESS_E,PRESS_C1,PRESS_C2,HUMIDITY,ACCL_X,ACCL_Y,ACCL_Z";
       dataFile.println(dataTitles);
       dataFile.close(); // close to save data
   }
     
   }
+  delay(500); // give the cam some time to figure its life out
   if(frontCam.begin()) {
     Serial.println("front cam intialized");
   }
@@ -168,10 +170,10 @@ void setup() {
   else {
     Serial.println("ERROR: rear camera not found");
   }
-  delay(300);
+  delay(500); // cam think time
   rearCam.setImageSize(VC0706_640x480);
   frontCam.setImageSize(VC0706_640x480);
-  delay(1200);  
+  delay(500);  // cam think time
   downlinkImage(rearCam); // rear cam downlink on powerup
   // setup interrupts
       // GO PRO ENABLE ON RISING EDGE, REMAIN ON FOR FLIGHT
@@ -188,12 +190,12 @@ void loop() {
   saveData(SDdataBuffer);         // save line to SD card
   
   if(frontCamTrigger) {         // poll camera triggers
-    delay(600);
+    delay(500);
     downlinkImage(frontCam);
     frontCamTrigger = false;
   }
   if(rearCamTrigger) {
-    delay(600);
+    delay(500);
     downlinkImage(rearCam);
     rearCamTrigger = false;
   }
@@ -207,16 +209,16 @@ void loop() {
     interrupts();           // enable all interrupts
     enableTimer3 = false;
   }
-  if (enableTimer4) {  // ENABLE DEPLOYMENT DELAY
-    noInterrupts();
-    TCCR4A = 0;
-    TCCR4B = 0;
-    TCNT3 = timer4_TCNT;
-    TCCR4B |= (1 << CS12);
-    TIMSK4 |= (1 << TOIE1); // timer overflow interrupt enable
-    interrupts();
-    enableTimer4 = false;
-  }
+//  if (enableTimer4) {  // ENABLE DEPLOYMENT DELAY
+//    noInterrupts();
+//    TCCR4A = 0;
+//    TCCR4B = 0;
+//    TCNT3 = timer4_TCNT;
+//    TCCR4B |= (1 << CS12);
+//    TIMSK4 |= (1 << TOIE1); // timer overflow interrupt enable
+//    interrupts();
+//    enableTimer4 = false;
+//  }
   if (enableTimer5) {  // ENABLE LOW RES IMG DELAY AFTER DEPLOY
     noInterrupts();
     TCCR5A = 0;
@@ -235,6 +237,8 @@ void loop() {
 String getSensorData() {
   // returns all sensor data in string format
   String sensorData = "";
+  sensorData += millis();
+  sensorData += ",";
   for (int i = 0; i < NUM_SENSORS; i++) {
     sensorData += String(analogRead(SENSOR_PINS[i])) + ",";
   }
@@ -294,18 +298,18 @@ ISR(TIMER3_OVF_vect) {
 }
 
 // timer4: deployment delay
-ISR(TIMER4_OVF_vect) {
-  TCNT4 = timer4_TCNT;
-  timer4_count++;
-  if (timer4_count > deployDelay) {
-    TIMSK4 = 0; // disable timer4 interrupts
-    timer4_count = 0;
-    digitalWrite(FRONT_MOTOR_PWR, HIGH); // deploy boom
-    digitalWrite(LED_TE3_STATUS, HIGH);
-    enableTimer3 = true;                 // enable ejection delay (105 s)
-    enableTimer5 = true;                 // enable delay low res images (5 s)
-  }
-}
+//ISR(TIMER4_OVF_vect) {
+//  TCNT4 = timer4_TCNT;
+//  timer4_count++;
+//  if (timer4_count > deployDelay) {
+//    TIMSK4 = 0; // disable timer4 interrupts
+//    timer4_count = 0;
+//    digitalWrite(FRONT_MOTOR_PWR, HIGH); // deploy boom
+//    digitalWrite(LED_TE3_STATUS, HIGH);
+//    enableTimer3 = true;                 // enable ejection delay (105 s)
+//    enableTimer5 = true;                 // enable delay low res images (5 s)
+//  }
+//}
 
 ISR(TIMER5_OVF_vect) {
   TCNT5 = timer5_TCNT;
@@ -323,13 +327,16 @@ void TimerEvent2ISR() {
   uint8_t i;
   delayMicroseconds(DEBOUNCE_DELAY);  // debounce delay
   if(digitalRead(TIMER_EVENT_2) == HIGH) {
-    digitalWrite(GOPRO_1_PWR, HIGH);
-    digitalWrite(GOPRO_2_PWR, HIGH);       
+    for(i = 0; i <10; i++) {
+      digitalWrite(GOPRO_1_PWR, HIGH);
+      digitalWrite(GOPRO_2_PWR, HIGH);       
+      delayMicroseconds(10000);
+      digitalWrite(GOPRO_1_PWR, LOW);
+      digitalWrite(GOPRO_2_PWR, LOW);
+      delayMicroseconds(10000);      
+    } 
     digitalWrite(LED_TE2_STATUS, HIGH); // status led on
     rearCamTrigger = true; // rear image before deployment
-    delayMicroseconds(10000);
-    digitalWrite(GOPRO_1_PWR, LOW);
-    digitalWrite(GOPRO_2_PWR, LOW);       
   }
 }
 
@@ -337,8 +344,9 @@ void TimerEvent3ISR() {
   delayMicroseconds(DEBOUNCE_DELAY);  // debounce delay
   if(digitalRead(TIMER_EVENT_3) == HIGH) {
     // Deploy boom and enable timer for front/rear ptc08 pics
-    //digitalWrite(LED_TE3_STATUS, HIGH);
-    enableTimer4 = true; // deployment delay enable
+    digitalWrite(LED_TE3_STATUS, HIGH);
+    digitalWrite(FRONT_MOTOR_PWR, HIGH); // deploy boom
+    enableTimer5 = true;                 // enable delay low res images (5 s)
   }
 }
 
