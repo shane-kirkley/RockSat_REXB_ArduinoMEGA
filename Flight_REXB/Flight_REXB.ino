@@ -6,8 +6,7 @@
 
 /*******************************************************************
  * TODO:
- * - Test timing of deployment and ejection.
- * - Timestamps for sensor data.
+ * - 
  *******************************************************************/
  
 #include <Dhcp.h>
@@ -69,8 +68,8 @@ const int REAR_MOTOR_PWR = 30;   // LA2
 // PTC08
 volatile boolean rearCamTrigger = false; // set cam triggers true for cam downlink when available.
 volatile boolean frontCamTrigger = false;
-Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial2); // pin 16,17 - glenn air A (colorful)
-Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial3);  // 
+Adafruit_VC0706 frontCam = Adafruit_VC0706(&Serial3); // pin 16,17 - glenn air A (colorful)
+Adafruit_VC0706 rearCam = Adafruit_VC0706(&Serial2);  // 
 
 // TIMERS: 
   // timer3 - delay EJECTION for ~80s
@@ -87,7 +86,7 @@ volatile uint8_t timer3_count = 0;
 
   // timer5 - delay LOW RES IMGS after deployment ~
 volatile boolean enableTimer5 = false; // true to enable timer5
-const uint8_t lowResDelay = 10;
+const uint8_t lowResDelay = 15;
 const int timer5_TCNT = 34286;
 volatile uint8_t timer5_count = 0;
 
@@ -174,7 +173,8 @@ void setup() {
   rearCam.setImageSize(VC0706_640x480);
   frontCam.setImageSize(VC0706_640x480);
   delay(500);  // cam think time
-  downlinkImage(rearCam); // rear cam downlink on powerup
+  //saveImageToSD(rearCam); // debug
+  saveAndDownlinkImage(rearCam); // rear cam downlink on powerup
   // setup interrupts
       // GO PRO ENABLE ON RISING EDGE, REMAIN ON FOR FLIGHT
   attachInterrupt(digitalPinToInterrupt(TIMER_EVENT_2), TimerEvent2ISR, CHANGE);
@@ -191,12 +191,12 @@ void loop() {
   
   if(frontCamTrigger) {         // poll camera triggers
     delay(500);
-    downlinkImage(frontCam);
+    saveAndDownlinkImage(frontCam);
     frontCamTrigger = false;
   }
   if(rearCamTrigger) {
     delay(500);
-    downlinkImage(rearCam);
+    saveAndDownlinkImage(rearCam);
     rearCamTrigger = false;
   }
   if(enableTimer3) {   // ENABLE EJECTION DELAY
@@ -254,34 +254,6 @@ void saveData(String data) {
     dataFile.println(data);
     //Serial.println("Saving data to sd card...");
     dataFile.close(); // close to save data
-  }
-}
-
-void downlinkImage(Adafruit_VC0706 cam) {
-  if(!cam.takePicture()) {
-    Serial.println("ERROR: Failed to take pic.");
-  }
-  else {
-    digitalWrite(LED_DOWNLINK_STATUS, HIGH);
-    Serial.println("Picture Taken!");
-    uint16_t downlinkJPGsize = cam.frameLength();
-    int32_t downlinkTime = millis();
-    Serial1.write(JPG_FRAME_START, sizeof(JPG_FRAME_START));
-    Serial1.write(jpgFileName, sizeof(jpgFileName));
-    Serial1.write(0x00);
-    while(downlinkJPGsize > 0) {
-      uint8_t * downlinkBuffer;
-      uint8_t downlinkBytesToRead = min(32, downlinkJPGsize);
-      downlinkBuffer = cam.readPicture(downlinkBytesToRead);
-      Serial1.write(downlinkBuffer, downlinkBytesToRead);
-      downlinkJPGsize -= downlinkBytesToRead;
-    }
-    Serial1.write(JPG_FRAME_END, sizeof(JPG_FRAME_END));
-    downlinkTime = millis() - downlinkTime;
-    Serial.println("downlink of jpg complete");
-    Serial.print(downlinkTime);
-    Serial.println(" ms elapsed");
-    digitalWrite(LED_DOWNLINK_STATUS, LOW);
   }
 }
 
@@ -347,6 +319,7 @@ void TimerEvent3ISR() {
     digitalWrite(LED_TE3_STATUS, HIGH);
     digitalWrite(FRONT_MOTOR_PWR, HIGH); // deploy boom
     enableTimer5 = true;                 // enable delay low res images (5 s)
+    enableTimer3 = true;
   }
 }
 
@@ -359,6 +332,34 @@ int ReadAxis(int axisPin) {
       reading += analogRead(axisPin);
     }
   return reading/sampleSize;
+}
+
+void downlinkImage(Adafruit_VC0706 cam) {
+  if(!cam.takePicture()) {
+    Serial.println("ERROR: Failed to take pic.");
+  }
+  else {
+    digitalWrite(LED_DOWNLINK_STATUS, HIGH);
+    Serial.println("Picture Taken!");
+    uint16_t downlinkJPGsize = cam.frameLength();
+    int32_t downlinkTime = millis();
+    Serial1.write(JPG_FRAME_START, sizeof(JPG_FRAME_START));
+    Serial1.write(jpgFileName, sizeof(jpgFileName));
+    Serial1.write(0x00);
+    while(downlinkJPGsize > 0) {
+      uint8_t * downlinkBuffer;
+      uint8_t downlinkBytesToRead = min(32, downlinkJPGsize);
+      downlinkBuffer = cam.readPicture(downlinkBytesToRead);
+      Serial1.write(downlinkBuffer, downlinkBytesToRead);
+      downlinkJPGsize -= downlinkBytesToRead;
+    }
+    Serial1.write(JPG_FRAME_END, sizeof(JPG_FRAME_END));
+    downlinkTime = millis() - downlinkTime;
+    Serial.println("downlink of jpg complete");
+    Serial.print(downlinkTime);
+    Serial.println(" ms elapsed");
+    digitalWrite(LED_DOWNLINK_STATUS, LOW);
+  }
 }
 
 void saveImageToSD(Adafruit_VC0706 cam) {
@@ -410,5 +411,45 @@ void saveImageToSD(Adafruit_VC0706 cam) {
  Serial.println("done!");
  Serial.print(time); 
  Serial.println(" ms elapsed");
+}
+
+void saveAndDownlinkImage(Adafruit_VC0706 cam) {
+  if (!cam.takePicture()) {
+    Serial.println("Failed to take pic.");
+    return;
+  }
+  else {
+    Serial.println("Picture taken!");
+    digitalWrite(LED_DOWNLINK_STATUS, HIGH);
+    char imgFileName[13];
+    strcpy(imgFileName, "IMAGE00.JPG");
+    for (int i = 0; i < 100; i++) {
+      imgFileName[5] = '0' + i/10;
+      imgFileName[6] = '0' + i%10;
+        // create if does not exist, do not open existing, write, sync after write
+      if (! SD.exists(imgFileName)) {
+        break;
+      }
+    }
+    File SDimgFile = SD.open(imgFileName, FILE_WRITE);
+    uint16_t jpglen = cam.frameLength();
+
+    // start frame for img downlink
+    Serial1.write(JPG_FRAME_START, sizeof(JPG_FRAME_START));
+    Serial1.write(imgFileName, sizeof(imgFileName));
+    Serial1.write(0x00);
+    
+    while (jpglen > 0) {
+      // read 32 bytes at a time;
+      uint8_t *buffer;
+      uint8_t bytesToRead = min(32, jpglen);
+      buffer = cam.readPicture(bytesToRead);
+      SDimgFile.write(buffer, bytesToRead); // write data to sd card
+      Serial1.write(buffer, bytesToRead); // downlink data
+      jpglen -= bytesToRead;
+    }
+    Serial1.write(JPG_FRAME_END, sizeof(JPG_FRAME_END)); // end frame
+    SDimgFile.close(); // close to save img
+  }
 }
 
