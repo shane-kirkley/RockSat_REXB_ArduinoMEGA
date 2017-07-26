@@ -191,13 +191,13 @@ void loop() {
   
   if(frontCamTrigger) {         // poll camera triggers
     delay(500);
-    saveAndDownlinkImage(frontCam);
     frontCamTrigger = false;
+    saveAndDownlinkImage(frontCam);
   }
   if(rearCamTrigger) {
     delay(500);
-    saveAndDownlinkImage(rearCam);
     rearCamTrigger = false;
+    saveAndDownlinkImage(rearCam);
   }
   if(enableTimer3) {   // ENABLE EJECTION DELAY
     noInterrupts();         // disable all interrupts
@@ -379,7 +379,7 @@ void saveImageToSD(Adafruit_VC0706 cam) {
    if (! SD.exists(imgFileName)) {
      break;
    }
- }
+  }
  Serial.println(imgFileName);
  // Open the file for writing
  File SDimgFile = SD.open(imgFileName, FILE_WRITE);
@@ -434,7 +434,7 @@ void saveAndDownlinkImage(Adafruit_VC0706 cam) {
     File SDimgFile = SD.open(imgFileName, FILE_WRITE);
     uint16_t jpglen = cam.frameLength();
 
-    // start frame for img downlink
+    // start frame for img downlink `
     Serial1.write(JPG_FRAME_START, sizeof(JPG_FRAME_START));
     Serial1.write(imgFileName, sizeof(imgFileName));
     Serial1.write(0x00);
@@ -450,6 +450,8 @@ void saveAndDownlinkImage(Adafruit_VC0706 cam) {
     }
     Serial1.write(JPG_FRAME_END, sizeof(JPG_FRAME_END)); // end frame
     SDimgFile.close(); // close to save img
+    digitalWrite(LED_DOWNLINK_STATUS, LOW);
+    cam.resumeVideo();
   }
 }
 
