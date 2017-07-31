@@ -23,8 +23,8 @@ File datafile;
 // SD CARD
 const int SD_CHIP_SELECT = 53;
 String SDdataBuffer = ""; // data string to be written to SD card.
-char filename[12];
-File dataFile;
+char filename[] = "testfile.txt";
+
 
 void setup() {
   // put your setup code here, to run once:
@@ -32,58 +32,59 @@ void setup() {
   pinMode(testingLED,OUTPUT);
   pinMode(warningLED,OUTPUT);
   pinMode(SD_CHIP_SELECT, OUTPUT);
-  strcpy(filename, "Calibration.txt");
-  SD.begin(SD_CHIP_SELECT);
-  
-  Serial.begin(9600);
+  if(!SD.begin(SD_CHIP_SELECT)) {
+    digitalWrite(warningLED,HIGH);
+  }
 }
 
 
 
 void loop() {
-  datafile= SD.open(filename,FILE_WRITE);
-  int i = 0;
-  digitalWrite(testingLED,HIGH);
-
-  int xRaw = ReadAxis(xInput);
-  int yRaw = ReadAxis(yInput);
-  int zRaw = ReadAxis(zInput);
+  datafile = SD.open(filename, FILE_WRITE);
+  if(datafile) {
+    int i = 0;
+    digitalWrite(testingLED,HIGH);
   
-  AutoCalibrate(xRaw, yRaw, zRaw);
+    int xRaw = ReadAxis(xInput);
+    int yRaw = ReadAxis(yInput);
+    int zRaw = ReadAxis(zInput);
+    
+    AutoCalibrate(xRaw, yRaw, zRaw);
+    
   
-
-  delay(1000);
-  digitalWrite(testingLED,LOW);
- 
-  datafile.print("Raw Ranges: X: ");
-  datafile.print(xRawMin);
-  datafile.print("-");
-  datafile.print(xRawMax);
-  datafile.print(", Y: ");
-  datafile.print(yRawMin);
-  datafile.print("-");
-  datafile.print(yRawMax);
-  datafile.print(", Z: ");
-  datafile.print(zRawMin);
-  datafile.print("-");
-  datafile.print(zRawMax);
-  datafile.println();
-  datafile.print(xRaw);
-  datafile.print(", ");
-  datafile.print(yRaw);
-  datafile.print(", ");
-  datafile.print(zRaw);
-  datafile.close();
-  while(i < 6){
-    digitalWrite(warningLED,HIGH);
-    delay(500);
-    digitalWrite(warningLED,LOW);
-    delay(500);
-    i++;
+    delay(1000);
+    digitalWrite(testingLED,LOW);
+   
+    datafile.print("Raw Ranges: X: ");
+    datafile.print(xRawMin);
+    datafile.print("-");
+    datafile.print(xRawMax);
+    datafile.print(", Y: ");
+    datafile.print(yRawMin);
+    datafile.print("-");
+    datafile.print(yRawMax);
+    datafile.print(", Z: ");
+    datafile.print(zRawMin);
+    datafile.print("-");
+    datafile.print(zRawMax);
+    datafile.println();
+    datafile.print(xRaw);
+    datafile.print(", ");
+    datafile.print(yRaw);
+    datafile.print(", ");
+    datafile.print(zRaw);
+    datafile.close();
+    while(i < 6){
+      digitalWrite(warningLED,HIGH);
+      delay(500);
+      digitalWrite(warningLED,LOW);
+      delay(500);
+      i++;
+    }
   }
-
-  
-  
+  else {
+    digitalWrite(testingLED, HIGH);
+  }
 }
 
 int ReadAxis(int axisPin)
@@ -100,7 +101,6 @@ int ReadAxis(int axisPin)
 
 void AutoCalibrate(int xRaw, int yRaw, int zRaw)
 {
-  //Serial.println("Calibrate");
   if (xRaw < xRawMin)
   {
     xRawMin = xRaw;
